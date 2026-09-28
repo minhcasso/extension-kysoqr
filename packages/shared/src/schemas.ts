@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 export const MAX_PDF_BYTES = 10 * 1024 * 1024;
+/** CAS: QR / yêu cầu ký hết hạn sau 30 phút. */
+export const SIGN_REQUEST_TTL_MS = 30 * 60 * 1000;
 
 export const FieldType = z.enum(['SIGNATURE', 'INITIAL', 'STAMP']);
 export type FieldType = z.infer<typeof FieldType>;
@@ -46,12 +48,18 @@ export interface CreateSignRequestResponse {
   qrContent: string;
   state: SignRequestState;
   pushSent: boolean;
+  expiresAt: string;
 }
 
 export interface SignRequestStatusResponse {
   signRequestId: string;
   state: SignRequestState;
   signedAt: string | null;
+  expiresAt: string;
+  /** Quá 30 phút mà chưa ký/từ chối. */
+  expired: boolean;
   /** true khi backend đã tải và lưu xong file đã ký. */
   fileReady: boolean;
+  /** true khi đã có orgIdSigned (từ webhook) để xem thông tin phiên ký. */
+  hasSigningRound: boolean;
 }
