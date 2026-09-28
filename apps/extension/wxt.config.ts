@@ -10,9 +10,10 @@ export default defineConfig({
   manifest: {
     name: 'KysoQR – Ký số PDF',
     description: 'Ký số file PDF ngay trên Chrome bằng Cas ID',
-    permissions: ['activeTab', 'storage'],
+    // webRequest: chỉ để nhận ra PDF (Content-Type); chỉ hoạt động khi người dùng cấp quyền mọi trang web.
+    permissions: ['activeTab', 'storage', 'webRequest'],
     host_permissions: [`${new URL(backendUrl).origin}/*`],
-    // Chỉ xin khi activeTab không đủ để tải PDF (người dùng bấm nút cấp quyền).
+    // Xin khi người dùng bật "Tự mở PDF bằng KysoQR" hoặc khi activeTab không đủ để tải PDF.
     optional_host_permissions: ['<all_urls>'],
     action: { default_title: 'Ký số PDF này với KysoQR' },
     content_security_policy: {

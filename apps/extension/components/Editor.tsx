@@ -2,6 +2,7 @@ import { CreateSignRequestMeta, type FieldType } from '@kysoqr/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { createSignRequest } from '../lib/api';
 import type { PDFDocumentProxy } from '../lib/pdf';
+import type { BackgroundMessage } from '../lib/settings';
 import type { PdfSource } from '../lib/source';
 import { getSavedCccd, setSavedCccd, upsertHistory, type HistoryItem } from '../lib/storage';
 import { DocumentView } from './DocumentView';
@@ -15,10 +16,13 @@ function defaultDocumentName(fileName: string) {
 export function Editor({
   source,
   doc,
+  originalUrl,
   onSubmitted,
 }: {
   source: PdfSource;
   doc: PDFDocumentProxy;
+  /** URL gốc của file (khi mở từ một tab), để quay về trình xem PDF của Chrome. */
+  originalUrl?: string;
   onSubmitted: (item: HistoryItem) => void;
 }) {
   const [fields, setFields] = useState<Field[]>([]);
@@ -121,6 +125,20 @@ export function Editor({
             {addButton('INITIAL')}
             {addButton('STAMP')}
             {placing && <span className="hint">Bấm vào vị trí trên trang để đặt ô · Esc để huỷ</span>}
+            {originalUrl && (
+              <button
+                type="button"
+                className="ghost"
+                title="Chỉ đọc file bằng trình xem PDF mặc định của Chrome"
+                onClick={() =>
+                  browser.runtime
+                    .sendMessage({ type: 'open-in-chrome', url: originalUrl } satisfies BackgroundMessage)
+                    .catch(() => (location.href = originalUrl))
+                }
+              >
+                Mở bằng trình xem của Chrome
+              </button>
+            )}
           </>
         }
       />

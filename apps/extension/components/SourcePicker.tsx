@@ -41,7 +41,12 @@ export function SourcePicker({
 
   return (
     <div className="center-card wide">
-      <h1>KysoQR – Ký số PDF</h1>
+      <div className="title-row">
+        <h1>KysoQR – Ký số PDF</h1>
+        <button type="button" className="ghost header-link" onClick={() => void browser.runtime.openOptionsPage()}>
+          Cài đặt
+        </button>
+      </div>
 
       {error && (
         <div className="error">

@@ -10,7 +10,7 @@ import type { HistoryItem } from '../../lib/storage';
 type Phase =
   | { kind: 'loading' }
   | { kind: 'pick'; error?: Error | null }
-  | { kind: 'edit'; source: PdfSource; doc: PDFDocumentProxy }
+  | { kind: 'edit'; source: PdfSource; doc: PDFDocumentProxy; originalUrl?: string }
   | { kind: 'signing'; item: HistoryItem }
   | { kind: 'done'; item: HistoryItem; signed: Uint8Array; doc: PDFDocumentProxy; hasSigningRound: boolean };
 
@@ -19,13 +19,13 @@ const jobId = new URLSearchParams(location.search).get('job');
 export function App() {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
 
-  async function openSource(load: () => Promise<PdfSource>) {
+  async function openSource(load: () => Promise<PdfSource>, originalUrl?: string) {
     setPhase({ kind: 'loading' });
     try {
       const source = await load();
       const doc = await openPdf(source.bytes);
       document.title = `Ký số – ${source.name}`;
-      setPhase({ kind: 'edit', source, doc });
+      setPhase({ kind: 'edit', source, doc, originalUrl });
     } catch (e) {
       const error = isPasswordError(e)
         ? new Error('File PDF có mật khẩu, vui lòng bỏ mật khẩu trước khi ký.')
@@ -39,7 +39,7 @@ export function App() {
   useEffect(() => {
     void readJob(jobId).then((job) => {
       if (!job) return setPhase({ kind: 'pick' });
-      void openSource(() => loadFromUrl(job));
+      void openSource(() => loadFromUrl(job), job.url);
     });
   }, []);
 
@@ -47,7 +47,7 @@ export function App() {
     // Phải gọi trực tiếp trong sự kiện bấm nút.
     const ok = await browser.permissions.request({ origins: [`${origin}/*`] });
     const job = await readJob(jobId);
-    if (ok && job) void openSource(() => loadFromUrl(job));
+    if (ok && job) void openSource(() => loadFromUrl(job), job.url);
   }
 
   const restart = () => setPhase({ kind: 'pick' });
@@ -74,6 +74,7 @@ export function App() {
         <Editor
           source={phase.source}
           doc={phase.doc}
+          originalUrl={phase.originalUrl}
           onSubmitted={(item) => setPhase({ kind: 'signing', item })}
         />
       );
