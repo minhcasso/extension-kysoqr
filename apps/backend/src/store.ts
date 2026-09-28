@@ -107,6 +107,13 @@ export class Store {
       .run(...(entries.map(([, v]) => v) as (string | number | null)[]), signRequestId);
   }
 
+  /** Các yêu cầu chưa kết thúc và chưa hết hạn (để hỏi CAS định kỳ). */
+  activeRequests(now: number): SignRequestRow[] {
+    return this.db
+      .prepare(`${SELECT} WHERE state IN ('NEW', 'ACCEPTED') AND expires_at > ? ORDER BY created_at DESC`)
+      .all(now) as unknown as SignRequestRow[];
+  }
+
   /** Các yêu cầu đã ký xong nhưng chưa tải được file (để thử lại). */
   pendingDownloads(maxAttempts: number): SignRequestRow[] {
     return this.db

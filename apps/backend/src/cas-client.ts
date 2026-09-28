@@ -21,11 +21,10 @@ export interface CasRequestDocumentInput {
 }
 
 export interface CasRequestDocumentResult {
-  requestId: string;
-  signRequestId: string;
-  signToken: string;
-  state: SignRequestState;
-  qrContent: string;
+  state: SignRequestState | undefined;
+  qrContent: string | undefined;
+  /** Cấu trúc response (chỉ tên field + kiểu, không có giá trị) để log/debug. */
+  shape: unknown;
 }
 
 export interface CasSignRequestStatus {
@@ -35,6 +34,7 @@ export interface CasSignRequestStatus {
   signedAt: string | null;
   identityKey: string | null;
   identityKeyExpiresAt: string | null;
+  orgIdSigned?: string | null;
 }
 
 export interface CasClient {
@@ -87,7 +87,14 @@ export function createCasClient(cfg: Config): CasClient {
       form.set('language', input.language);
       if (input.identificationNumber) form.set('identificationNumber', input.identificationNumber);
       const res = await call('/esign/request-document', { method: 'POST', body: form });
-      return (await res.json()) as CasRequestDocumentResult;
+      const data: unknown = await res.json();
+      // Tài liệu ghi các field ở cấp gốc, nhưng thực tế có thể bị bọc trong object con.
+      const state = findString(data, 'state');
+      return {
+        qrContent: findString(data, 'qrContent'),
+        state: state as SignRequestState | undefined,
+        shape: describeShape(data),
+      };
     },
 
     async requestStatus(signRequestId) {
@@ -108,4 +115,26 @@ export function createCasClient(cfg: Config): CasClient {
       return res.json();
     },
   };
+}
+
+/** Tìm field dạng chuỗi theo tên, ở bất kỳ độ sâu nào (tối đa 4 cấp). */
+export function findString(value: unknown, key: string, depth = 0): string | undefined {
+  if (!value || typeof value !== 'object' || depth > 4) return undefined;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj[key] === 'string' && obj[key]) return obj[key] as string;
+  for (const v of Object.values(obj)) {
+    const found = findString(v, key, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Thay giá trị bằng kiểu dữ liệu, để log cấu trúc mà không lộ nội dung. */
+export function describeShape(value: unknown, depth = 0): unknown {
+  if (Array.isArray(value)) return depth > 4 ? 'array' : [describeShape(value[0], depth + 1)];
+  if (value && typeof value === 'object') {
+    if (depth > 4) return 'object';
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, describeShape(v, depth + 1)]));
+  }
+  return value === null ? 'null' : typeof value;
 }

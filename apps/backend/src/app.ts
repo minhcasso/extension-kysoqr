@@ -132,12 +132,21 @@ export async function buildApp({ env, store, cas, now = Date.now }: AppDeps) {
         language: meta.language,
       });
 
+      req.log.info({ signRequestId, casResponseShape: result.shape }, 'CAS request-document trả về');
+      const pushSent = Boolean(meta.identificationNumber);
+      const initialState = SignRequestState.catch('NEW').parse(result.state);
+      if (!result.qrContent && !pushSent) {
+        // Không có QR và không gửi push → người dùng không có cách nào để ký.
+        req.log.error({ signRequestId, casResponseShape: result.shape }, 'CAS không trả về qrContent');
+        return reply.code(502).send({ error: 'CAS_NO_QR', casResponseShape: result.shape });
+      }
+
       const createdAt = now();
       store.insert({
         signRequestId,
         accessTokenHash: sha256(accessToken),
         documentName: meta.documentName,
-        state: result.state ?? 'NEW',
+        state: initialState,
         createdAt,
         expiresAt: createdAt + SIGN_REQUEST_TTL_MS,
         lastSyncedAt: createdAt,
@@ -147,9 +156,9 @@ export async function buildApp({ env, store, cas, now = Date.now }: AppDeps) {
       const body: CreateSignRequestResponse = {
         signRequestId,
         accessToken,
-        qrContent: result.qrContent,
-        state: result.state ?? 'NEW',
-        pushSent: Boolean(meta.identificationNumber),
+        qrContent: result.qrContent ?? '',
+        state: initialState,
+        pushSent,
         expiresAt: new Date(createdAt + SIGN_REQUEST_TTL_MS).toISOString(),
       };
       return reply.code(201).send(body);
@@ -188,6 +197,9 @@ export async function buildApp({ env, store, cas, now = Date.now }: AppDeps) {
    * (+ lọc IP nếu có cấu hình). Luôn trả 200 nhanh để CAS không gửi lại.
    */
   app.post<{ Querystring: { token?: string } }>('/webhooks/cas-sign', async (req, reply) => {
+    if (!env.CAS_WEBHOOK_TOKEN) {
+      return reply.code(503).send({ error: 'WEBHOOK_DISABLED' });
+    }
     if (!req.query.token || !safeEqual(req.query.token, env.CAS_WEBHOOK_TOKEN)) {
       return reply.code(401).send({ error: 'UNAUTHORIZED' });
     }

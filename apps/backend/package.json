@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "start": "tsx --env-file-if-exists=.env src/main.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "webhook-url": "tsx --env-file-if-exists=.env src/webhook-url.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

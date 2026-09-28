@@ -14,7 +14,10 @@ const cas = createCasClient({
 
 const app = await buildApp({ env, store, cas });
 
-const retry = setInterval(() => app.signService.retryPendingDownloads(), 60_000);
+// Hỏi CAS mỗi 5 giây cho các yêu cầu đang chờ (song song với webhook, cái nào tới trước dùng cái đó).
+const sync = setInterval(() => {
+  app.signService.syncActive().catch((err) => app.log.error({ err }, 'đồng bộ trạng thái thất bại'));
+}, 5_000);
 const purge = setInterval(
   async () => {
     const removed = await store.purge(Date.now() - env.RETENTION_DAYS * 86_400_000);
@@ -24,7 +27,7 @@ const purge = setInterval(
 );
 
 app.addHook('onClose', async () => {
-  clearInterval(retry);
+  clearInterval(sync);
   clearInterval(purge);
   store.close();
 });
@@ -34,4 +37,9 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 await app.listen({ port: env.PORT, host: '0.0.0.0' });
-app.log.info(`Webhook URL (khai báo ở CAS Console): <PUBLIC_URL>/webhooks/cas-sign?token=<CAS_WEBHOOK_TOKEN>`);
+if (!env.CAS_WEBHOOK_TOKEN) {
+  app.log.warn('Chưa đặt CAS_WEBHOOK_TOKEN: webhook tắt, trạng thái lấy bằng cách hỏi CAS mỗi 5 giây.');
+} else if (env.PUBLIC_URL) {
+  // Không log token; chạy `npm run webhook-url -w @kysoqr/backend` để in URL đầy đủ.
+  app.log.info(`Webhook endpoint: ${env.PUBLIC_URL}/webhooks/cas-sign?token=***`);
+}

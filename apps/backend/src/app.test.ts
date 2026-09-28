@@ -11,19 +11,17 @@ import { Store } from './store';
 const TOKEN = 'x'.repeat(40);
 const PDF = new TextEncoder().encode('%PDF-1.7\n...');
 
-function fakeCas(): CasClient & { downloadFile: ReturnType<typeof vi.fn> } {
+function fakeCas() {
   return {
-    requestDocument: vi.fn(async (i) => ({
-      requestId: 'r1',
-      signRequestId: i.signRequestId,
-      signToken: 't',
-      state: 'NEW' as const,
-      qrContent: 'casid://sign?t=t',
+    requestDocument: vi.fn(async () => ({
+      state: 'NEW' as 'NEW' | undefined,
+      qrContent: 'casid://sign?t=t' as string | undefined,
+      shape: {},
     })),
     requestStatus: vi.fn(),
     downloadFile: vi.fn(async () => PDF),
     signingRound: vi.fn(async () => ({ signingRound: {} })),
-  };
+  } satisfies CasClient;
 }
 
 function multipart(meta: unknown, file: Uint8Array = PDF) {
@@ -90,6 +88,24 @@ describe('backend', () => {
     );
   });
 
+  it('CAS không trả QR và không có CCCD → báo lỗi rõ ràng, không lưu yêu cầu', async () => {
+    cas.requestDocument.mockResolvedValueOnce({ state: undefined, qrContent: undefined, shape: { data: {} } });
+    const res = await app.inject({ method: 'POST', url: '/api/sign-requests', ...multipart(meta) });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toBe('CAS_NO_QR');
+  });
+
+  it('CAS không trả QR nhưng đã gửi push qua CCCD → vẫn tạo yêu cầu', async () => {
+    cas.requestDocument.mockResolvedValueOnce({ state: undefined, qrContent: undefined, shape: {} });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sign-requests',
+      ...multipart({ ...meta, identificationNumber: '001099012345' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ qrContent: '', pushSent: true, state: 'NEW' });
+  });
+
   it('từ chối file không phải PDF', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -138,6 +154,24 @@ describe('backend', () => {
     });
     expect(file.headers['content-type']).toBe('application/pdf');
     expect(file.rawPayload.subarray(0, 5).toString()).toBe('%PDF-');
+  });
+
+  it('job 5 giây: hỏi CAS và tải file khi đã ký, không cần webhook', async () => {
+    const { signRequestId } = await create();
+    cas.requestStatus = vi.fn(async () => ({
+      signRequestId,
+      state: 'COMPLETED' as const,
+      lastUpdatedAt: null,
+      signedAt: '2026-09-28T02:04:18.000Z',
+      identityKey: 'b3f1e2c4-8a2d-4c1a-9e3f-1a2b3c4d5e6f',
+      identityKeyExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      orgIdSigned: 'kysoqr.com#5xh7Oo',
+    }));
+    store.update(signRequestId, { lastSyncedAt: 0 });
+    await app.signService.syncActive();
+    await app.signService.ensureDownloaded(signRequestId);
+    expect(store.get(signRequestId)).toMatchObject({ state: 'COMPLETED', orgIdSigned: 'kysoqr.com#5xh7Oo' });
+    expect(store.get(signRequestId)?.filePath).toBeTruthy();
   });
 
   it('không lùi trạng thái COMPLETED về NEW', async () => {

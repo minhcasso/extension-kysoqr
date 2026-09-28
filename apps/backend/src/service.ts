@@ -86,6 +86,25 @@ export class SignService {
     }
   }
 
+  private syncing = false;
+
+  /**
+   * Chạy mỗi 5 giây: hỏi CAS trạng thái mọi yêu cầu đang chờ, để file đã ký được tải về
+   * kể cả khi webhook không tới và người dùng đã đóng tab.
+   */
+  async syncActive() {
+    if (this.syncing) return;
+    this.syncing = true;
+    try {
+      for (const row of this.store.activeRequests(this.now())) {
+        await this.syncIfStale(row);
+      }
+      this.retryPendingDownloads();
+    } finally {
+      this.syncing = false;
+    }
+  }
+
   retryPendingDownloads() {
     for (const row of this.store.pendingDownloads(MAX_DOWNLOAD_ATTEMPTS)) {
       void this.ensureDownloaded(row.signRequestId);

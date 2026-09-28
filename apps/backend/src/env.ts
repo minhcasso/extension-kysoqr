@@ -16,7 +16,19 @@ const Env = z.object({
   CAS_ESIGN_API_KEY: z.string().min(1),
   CAS_API_VERSION: z.string().default('2023-01-01'),
   PORT: z.coerce.number().int().default(8787),
-  CAS_WEBHOOK_TOKEN: z.string().min(32, 'CAS_WEBHOOK_TOKEN cần ít nhất 32 ký tự'),
+  /** URL công khai của backend (domain thật hoặc ngrok), dùng để in URL webhook. */
+  PUBLIC_URL: z
+    .string()
+    .url()
+    .transform((u) => u.replace(/\/+$/, ''))
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  /** Không đặt = tắt webhook; backend vẫn chạy được nhờ hỏi request-status. */
+  CAS_WEBHOOK_TOKEN: z
+    .string()
+    .min(32, 'CAS_WEBHOOK_TOKEN cần ít nhất 32 ký tự')
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
   CAS_WEBHOOK_ALLOWED_IPS: list,
   EXTENSION_ORIGINS: list,
   DATA_DIR: z.string().default('./data'),
