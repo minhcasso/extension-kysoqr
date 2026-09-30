@@ -67,69 +67,83 @@ export function SigningStatus({
   }, [item.signRequestId]);
 
   const remainingMs = Date.parse(item.expiresAt) - now;
-  const state = status?.expired || (remainingMs <= 0 && status?.state === 'NEW') ? 'EXPIRED' : (status?.state ?? item.state ?? 'NEW');
+  const state =
+    status?.expired || (remainingMs <= 0 && status?.state === 'NEW')
+      ? 'EXPIRED'
+      : (status?.state ?? item.state ?? 'NEW');
 
   return (
-    <div className="center-card">
-      <h2>{item.documentName}</h2>
-      {(state === 'NEW' || state === 'ACCEPTED' || state === 'COMPLETED') && <Steps state={state} />}
+    <>
+      <section className="card status-card">
+        <span className="eyebrow">Yêu cầu ký</span>
+        <h2 className="status-title">{item.documentName}</h2>
+        {(state === 'NEW' || state === 'ACCEPTED' || state === 'COMPLETED') && (
+          <Steps state={state} />
+        )}
 
-      {state === 'NEW' && (
-        <>
-          <p className="lead">
-            {item.pushSent
-              ? `Đã gửi yêu cầu tới app Cas ID trên điện thoại của bạn. Mở thông báo để ký${item.qrContent ? ', hoặc quét mã QR bên dưới' : ''}.`
-              : 'Mở app Cas ID trên điện thoại và quét mã QR để ký.'}
-          </p>
-          {qr ? (
-            <img className="qr" src={qr} alt="Mã QR ký số Cas ID" width={260} height={260} />
-          ) : (
-            !item.qrContent && <p className="muted small">Cas ID không trả về mã QR cho yêu cầu này.</p>
-          )}
-          <p className="muted">Mã hết hạn sau {formatRemaining(remainingMs)}</p>
-        </>
-      )}
+        {state === 'NEW' && (
+          <>
+            <p className="lead">
+              {item.pushSent
+                ? `Đã gửi yêu cầu tới app Cas ID trên điện thoại. Mở thông báo để ký${item.qrContent ? ', hoặc quét mã QR bên dưới' : ''}.`
+                : 'Mở app Cas ID trên điện thoại và quét mã QR để ký.'}
+            </p>
+            {qr ? (
+              <img className="qr" src={qr} alt="Mã QR ký số Cas ID" width={220} height={220} />
+            ) : (
+              !item.qrContent && (
+                <p className="muted small">Cas ID không trả về mã QR cho yêu cầu này.</p>
+              )
+            )}
+            <p className="countdown">
+              Mã hết hạn sau <strong>{formatRemaining(remainingMs)}</strong>
+            </p>
+          </>
+        )}
 
-      {state === 'ACCEPTED' && (
-        <>
-          <div className="spinner" />
-          <p className="lead">Bạn đã xác nhận trên Cas ID. Hệ thống đang đóng chữ ký số vào tài liệu…</p>
-        </>
-      )}
+        {state === 'ACCEPTED' && (
+          <>
+            <div className="spinner" />
+            <p className="lead">
+              Bạn đã xác nhận trên Cas ID. Hệ thống đang đóng chữ ký số vào tài liệu…
+            </p>
+          </>
+        )}
 
-      {state === 'COMPLETED' && (
-        <>
-          <div className="spinner" />
-          <p className="lead">Ký thành công. Đang tải file đã ký…</p>
-        </>
-      )}
+        {state === 'COMPLETED' && (
+          <>
+            <div className="spinner" />
+            <p className="lead">Ký thành công. Đang tải file đã ký…</p>
+          </>
+        )}
 
-      {state === 'REJECTED' && (
-        <>
+        {state === 'REJECTED' && (
           <p className="lead error-text">Yêu cầu ký đã bị từ chối trên app Cas ID.</p>
-          <button type="button" className="primary" onClick={onRestart}>
-            Tạo yêu cầu mới
-          </button>
-        </>
-      )}
-
-      {state === 'EXPIRED' && (
-        <>
+        )}
+        {state === 'EXPIRED' && (
           <p className="lead error-text">Yêu cầu ký đã hết hạn (quá 30 phút).</p>
-          <button type="button" className="primary" onClick={onRestart}>
-            Tạo yêu cầu mới
-          </button>
-        </>
-      )}
+        )}
 
-      {(state === 'ACCEPTED' || state === 'COMPLETED') && (
-        <p className="muted small">
-          Bạn có thể đóng tab này. File đã ký vẫn được lưu và mở lại được ở “Yêu cầu ký gần đây”.
-        </p>
-      )}
-      {error && <div className="error">{error} Đang thử lại…</div>}
-      <p className="muted small">Mã yêu cầu: {item.signRequestId}</p>
-    </div>
+        {(state === 'ACCEPTED' || state === 'COMPLETED') && (
+          <p className="muted small">
+            Bạn có thể đóng tab này. File đã ký vẫn được lưu và mở lại được ở “Lịch sử ký” › “Yêu
+            cầu ký gần đây”.
+          </p>
+        )}
+        {error && <div className="error">{error} Đang thử lại…</div>}
+        <p className="muted small mono-id">Mã yêu cầu: {item.signRequestId}</p>
+      </section>
+
+      <button
+        type="button"
+        className={state === 'REJECTED' || state === 'EXPIRED' ? 'sign-btn' : 'btn-outline wide'}
+        onClick={onRestart}
+      >
+        {state === 'REJECTED' || state === 'EXPIRED'
+          ? 'Tạo yêu cầu mới'
+          : 'Huỷ, quay lại chỉnh vị trí ký'}
+      </button>
+    </>
   );
 }
 

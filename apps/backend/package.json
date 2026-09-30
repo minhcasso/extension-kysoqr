@@ -14,7 +14,9 @@
     "@fastify/multipart": "^9.0.1",
     "@fastify/rate-limit": "^10.1.1",
     "@kysoqr/shared": "*",
+    "asn1js": "^3.0.10",
     "fastify": "^5.1.0",
+    "pkijs": "^3.4.1",
     "tsx": "^4.19.2",
     "zod": "^3.23.8"
   },

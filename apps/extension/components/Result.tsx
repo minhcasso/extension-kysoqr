@@ -1,24 +1,31 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getSigningRound, type SigningRound } from '../lib/api';
-import type { PDFDocumentProxy } from '../lib/pdf';
 import type { HistoryItem } from '../lib/storage';
-import { DocumentView } from './DocumentView';
+import { Icon } from './Icon';
 
-export function Result({
+export function signedFileName(item: HistoryItem) {
+  return `${item.fileName.replace(/\.pdf$/i, '').replace(/_signed$/i, '')}_signed.pdf`;
+}
+
+export function ResultPanel({
   item,
   signed,
-  doc,
   hasSigningRound,
   onNew,
+  onContinue,
 }: {
   item: HistoryItem;
   signed: Uint8Array;
-  doc: PDFDocumentProxy;
   hasSigningRound: boolean;
   onNew: () => void;
+  /** Mở file vừa ký để thêm chữ ký tiếp (người ký khác, con dấu...). */
+  onContinue: () => void;
 }) {
   const [round, setRound] = useState<SigningRound | null>(null);
-  const url = useMemo(() => URL.createObjectURL(new Blob([signed.slice()], { type: 'application/pdf' })), [signed]);
+  const url = useMemo(
+    () => URL.createObjectURL(new Blob([signed.slice()], { type: 'application/pdf' })),
+    [signed],
+  );
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
 
   useEffect(() => {
@@ -26,24 +33,25 @@ export function Result({
     getSigningRound(item.signRequestId, item.accessToken).then(setRound, () => setRound(null));
   }, [hasSigningRound, item]);
 
-  const fileName = `${item.fileName.replace(/\.pdf$/i, '')}_signed.pdf`;
-
   return (
-    <div className="layout">
-      <DocumentView doc={doc} toolbar={<strong className="ok-text">✓ Đã ký số thành công</strong>} />
-      <aside className="panel">
-        <h2>Tài liệu đã ký</h2>
-        <p>{item.documentName}</p>
-        <a className="button primary big" href={url} download={fileName}>
-          Tải file đã ký
+    <>
+      <section className="card status-card done">
+        <Icon name="checkCircle" size={40} className="done-icon" />
+        <h2 className="status-title">Đã ký số thành công</h2>
+        <p className="muted">{item.documentName}</p>
+        <a className="sign-btn" href={url} download={signedFileName(item)}>
+          <Icon name="download" size={18} /> Tải file đã ký
         </a>
+      </section>
 
+      <section className="card">
+        <h3 className="card-title">Thông tin phiên ký</h3>
         {round ? (
           <dl className="round">
             <dt>Người ký</dt>
             <dd>{round.signer?.displayName ?? '—'}</dd>
             <dt>Thời điểm ký</dt>
-            <dd>{round.signedAt ?? '—'}</dd>
+            <dd>{round.signedAt ? new Date(round.signedAt).toLocaleString('vi-VN') : '—'}</dd>
             <dt>Thiết bị</dt>
             <dd>{round.device?.model ?? '—'}</dd>
             <dt>Xác thực</dt>
@@ -57,14 +65,19 @@ export function Result({
           <p className="muted small">
             {hasSigningRound
               ? 'Đang tải thông tin phiên ký…'
-              : 'Thông tin phiên ký (người ký, chứng thư số) sẽ có khi backend nhận webhook từ CAS.'}
+              : 'Thông tin phiên ký (thiết bị, cách xác thực) sẽ có khi backend nhận webhook từ CAS. Chi tiết chữ ký và chuỗi chứng thư xem ở “Lịch sử ký”.'}
           </p>
         )}
+      </section>
 
-        <button type="button" className="secondary" onClick={onNew}>
-          Ký tài liệu khác
+      <div className="button-row">
+        <button type="button" className="btn-outline" onClick={onContinue}>
+          <Icon name="pen" size={14} /> Ký tiếp tài liệu này
         </button>
-      </aside>
-    </div>
+        <button type="button" className="btn-outline" onClick={onNew}>
+          <Icon name="upload" size={14} /> Ký tài liệu khác
+        </button>
+      </div>
+    </>
   );
 }

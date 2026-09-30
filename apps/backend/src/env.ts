@@ -33,6 +33,11 @@ const Env = z.object({
   EXTENSION_ORIGINS: list,
   DATA_DIR: z.string().default('./data'),
   RETENTION_DAYS: z.coerce.number().positive().default(7),
+  /** File PEM chứa (các) chứng thư gốc tin cậy, vd. Root CA quốc gia. Không đặt = không xác minh được tới gốc. */
+  TRUSTED_CA_PEM_FILE: z
+    .string()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
 });
 export type Env = z.infer<typeof Env>;
 

@@ -17,6 +17,9 @@ export interface CasRequestDocumentInput {
   fileName: string;
   signatureFields: SignatureField[];
   identificationNumber?: string;
+  /** Chỉ khi ký cho doanh nghiệp: 10 hoặc 10-3 chữ số. */
+  taxCode?: string;
+  organizationName?: string;
   language: 'vi' | 'en';
 }
 
@@ -86,6 +89,8 @@ export function createCasClient(cfg: Config): CasClient {
       form.set('signatureFields', JSON.stringify(input.signatureFields));
       form.set('language', input.language);
       if (input.identificationNumber) form.set('identificationNumber', input.identificationNumber);
+      if (input.taxCode) form.set('taxCode', input.taxCode);
+      if (input.organizationName) form.set('organizationName', input.organizationName);
       const res = await call('/esign/request-document', { method: 'POST', body: form });
       const data: unknown = await res.json();
       // Tài liệu ghi các field ở cấp gốc, nhưng thực tế có thể bị bọc trong object con.
@@ -134,7 +139,9 @@ export function describeShape(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return depth > 4 ? 'array' : [describeShape(value[0], depth + 1)];
   if (value && typeof value === 'object') {
     if (depth > 4) return 'object';
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, describeShape(v, depth + 1)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, describeShape(v, depth + 1)]),
+    );
   }
   return value === null ? 'null' : typeof value;
 }

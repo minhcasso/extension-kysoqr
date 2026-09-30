@@ -1,4 +1,6 @@
 import type {
+  CertificateCheckRequest,
+  CertificateCheckResponse,
   CreateSignRequestMeta,
   CreateSignRequestResponse,
   SignRequestStatusResponse,
@@ -29,7 +31,12 @@ const MESSAGES: Record<string, string> = {
 };
 
 async function toError(res: Response): Promise<ApiError> {
-  let body: { error?: string; casStatus?: number; detail?: string; issues?: { message: string }[] } = {};
+  let body: {
+    error?: string;
+    casStatus?: number;
+    detail?: string;
+    issues?: { message: string }[];
+  } = {};
   try {
     body = await res.json();
   } catch {
@@ -80,7 +87,10 @@ export async function createSignRequest(
   return res.json();
 }
 
-export async function getStatus(id: string, accessToken: string): Promise<SignRequestStatusResponse> {
+export async function getStatus(
+  id: string,
+  accessToken: string,
+): Promise<SignRequestStatusResponse> {
   const res = await request(`/api/sign-requests/${id}`, auth(accessToken));
   return res.json();
 }
@@ -105,8 +115,23 @@ export interface SigningRound {
   };
 }
 
-export async function getSigningRound(id: string, accessToken: string): Promise<SigningRound | null> {
+export async function getSigningRound(
+  id: string,
+  accessToken: string,
+): Promise<SigningRound | null> {
   const res = await request(`/api/sign-requests/${id}/signing-round`, auth(accessToken));
   const data = (await res.json()) as { signingRound?: SigningRound };
   return data.signingRound ?? null;
+}
+
+/** Kiểm tra chuỗi chứng thư (tới gốc tin cậy, OCSP, CRL). Chỉ gửi chứng thư, không gửi nội dung file. */
+export async function checkCertificates(
+  body: CertificateCheckRequest,
+): Promise<CertificateCheckResponse> {
+  const res = await request('/api/certificates/check', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
 }

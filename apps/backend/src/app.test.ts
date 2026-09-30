@@ -78,7 +78,12 @@ describe('backend', () => {
     app.inject({
       method: 'POST',
       url: `/webhooks/cas-sign?token=${token}`,
-      payload: { environment: 'dev', webhookType: 'SIGN', webhookCode: 'DEFAULT_UPDATE', signRequest },
+      payload: {
+        environment: 'dev',
+        webhookType: 'SIGN',
+        webhookCode: 'DEFAULT_UPDATE',
+        signRequest,
+      },
     });
 
   it('tạo yêu cầu và gửi đúng dữ liệu sang CAS', async () => {
@@ -89,14 +94,22 @@ describe('backend', () => {
   });
 
   it('CAS không trả QR và không có CCCD → báo lỗi rõ ràng, không lưu yêu cầu', async () => {
-    cas.requestDocument.mockResolvedValueOnce({ state: undefined, qrContent: undefined, shape: { data: {} } });
+    cas.requestDocument.mockResolvedValueOnce({
+      state: undefined,
+      qrContent: undefined,
+      shape: { data: {} },
+    });
     const res = await app.inject({ method: 'POST', url: '/api/sign-requests', ...multipart(meta) });
     expect(res.statusCode).toBe(502);
     expect(res.json().error).toBe('CAS_NO_QR');
   });
 
   it('CAS không trả QR nhưng đã gửi push qua CCCD → vẫn tạo yêu cầu', async () => {
-    cas.requestDocument.mockResolvedValueOnce({ state: undefined, qrContent: undefined, shape: {} });
+    cas.requestDocument.mockResolvedValueOnce({
+      state: undefined,
+      qrContent: undefined,
+      shape: {},
+    });
     const res = await app.inject({
       method: 'POST',
       url: '/api/sign-requests',
@@ -104,6 +117,53 @@ describe('backend', () => {
     });
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({ qrContent: '', pushSent: true, state: 'NEW' });
+  });
+
+  it('ký cho doanh nghiệp: gửi mã số thuế sang CAS', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sign-requests',
+      ...multipart({
+        ...meta,
+        signerKind: 'business',
+        taxCode: '0316794479',
+        organizationName: 'CONG TY TNHH CASSO',
+      }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(cas.requestDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ taxCode: '0316794479', organizationName: 'CONG TY TNHH CASSO' }),
+    );
+  });
+
+  it('ký cho doanh nghiệp mà thiếu mã số thuế → 400', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sign-requests',
+      ...multipart({ ...meta, signerKind: 'business' }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(cas.requestDocument).not.toHaveBeenCalled();
+  });
+
+  it('ký cá nhân: không gửi mã số thuế dù extension lỡ gửi kèm', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/sign-requests',
+      ...multipart({ ...meta, taxCode: '0316794479' }),
+    });
+    expect(cas.requestDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ taxCode: undefined }),
+    );
+  });
+
+  it('kiểm tra chứng thư: từ chối dữ liệu không phải chứng thư', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/certificates/check',
+      payload: { certificates: [Buffer.from('không phải chứng thư').toString('base64')] },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('từ chối file không phải PDF', async () => {
@@ -146,7 +206,11 @@ describe('backend', () => {
       url: `/api/sign-requests/${signRequestId}`,
       headers: { 'x-access-token': accessToken },
     });
-    expect(status.json()).toMatchObject({ state: 'COMPLETED', fileReady: true, hasSigningRound: true });
+    expect(status.json()).toMatchObject({
+      state: 'COMPLETED',
+      fileReady: true,
+      hasSigningRound: true,
+    });
 
     const file = await app.inject({
       url: `/api/sign-requests/${signRequestId}/file`,
@@ -170,7 +234,10 @@ describe('backend', () => {
     store.update(signRequestId, { lastSyncedAt: 0 });
     await app.signService.syncActive();
     await app.signService.ensureDownloaded(signRequestId);
-    expect(store.get(signRequestId)).toMatchObject({ state: 'COMPLETED', orgIdSigned: 'kysoqr.com#5xh7Oo' });
+    expect(store.get(signRequestId)).toMatchObject({
+      state: 'COMPLETED',
+      orgIdSigned: 'kysoqr.com#5xh7Oo',
+    });
     expect(store.get(signRequestId)?.filePath).toBeTruthy();
   });
 

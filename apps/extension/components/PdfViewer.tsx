@@ -8,7 +8,9 @@ import {
   type ViewportBox,
 } from '@kysoqr/shared';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from '../lib/pdf';
+import { DEFAULT_BOX } from '../lib/placement';
+import { TextLayer, type PDFDocumentProxy, type PDFPageProxy, type PageViewport } from '../lib/pdf';
+import { GripIcon, Icon, type IconName } from './Icon';
 
 export interface Field {
   id: string;
@@ -23,8 +25,25 @@ export const FIELD_LABELS: Record<FieldType, string> = {
   STAMP: 'Con dấu',
 };
 
-/** Kích thước mặc định của ô ký mới, đơn vị điểm PDF (1/72 inch). */
-const DEFAULT_BOX = { width: 170, height: 60 };
+export const FIELD_ICONS: Record<FieldType, IconName> = {
+  SIGNATURE: 'pen',
+  INITIAL: 'initial',
+  STAMP: 'stamp',
+};
+
+const FIELD_HINTS: Record<FieldType, string> = {
+  SIGNATURE: 'Người ký duyệt trên Cas ID',
+  INITIAL: 'Ký nháy khi duyệt trên Cas ID',
+  STAMP: 'Đóng dấu khi duyệt trên Cas ID',
+};
+
+/** Số thứ tự của ô trong cùng loại: "Chữ ký #1", "Chữ ký #2", "Con dấu #1"... */
+export function fieldNumber(fields: Field[], field: Field) {
+  return (
+    fields.filter((f) => f.fieldType === field.fieldType).findIndex((f) => f.id === field.id) + 1
+  );
+}
+
 const MIN_BOX_PX = 24;
 
 interface Props {
@@ -64,6 +83,7 @@ function PageView({
   const [visible, setVisible] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +124,22 @@ function PageView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, scale, visible]);
 
+  useEffect(() => {
+    const container = textRef.current;
+    if (!page || !viewport || !visible || !container) return;
+    container.replaceChildren();
+    const layer = new TextLayer({
+      textContentSource: page.streamTextContent(),
+      container,
+      viewport,
+    });
+    layer.render().catch(() => {
+      // bị huỷ do đổi zoom
+    });
+    return () => layer.cancel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, scale, visible]);
+
   const size = viewport
     ? { width: viewport.width, height: viewport.height }
     : { width: 595 * scale, height: 842 * scale };
@@ -125,25 +161,31 @@ function PageView({
       id: crypto.randomUUID(),
       page: pageNumber,
       fieldType: placing,
-      ratios: viewportBoxToRatios(box, viewport.transform as unknown as Transform, page.view as unknown as PageBox),
+      ratios: viewportBoxToRatios(
+        box,
+        viewport.transform as unknown as Transform,
+        page.view as unknown as PageBox,
+      ),
     });
   }
 
   return (
-    <div className="page-wrap">
+    <div className="page-wrap" data-page={pageNumber}>
       <div
         ref={wrapRef}
         className={`page ${placing ? 'placing' : ''}`}
-        style={size}
+        style={{ ...size, ['--scale-factor' as string]: scale }}
         onPointerDown={editable ? handlePlace : undefined}
       >
         <canvas ref={canvasRef} style={size} />
+        <div ref={textRef} className="textLayer" />
         {page &&
           viewport &&
           pageFields.map((f) => (
             <FieldBox
               key={f.id}
               field={f}
+              number={fieldNumber(fields, f)}
               page={page}
               viewport={viewport}
               editable={editable}
@@ -156,15 +198,16 @@ function PageView({
             />
           ))}
       </div>
-      <div className="page-number">Trang {pageNumber}</div>
     </div>
   );
 }
 
-const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), Math.max(min, max));
+const clamp = (v: number, min: number, max: number) =>
+  Math.min(Math.max(v, min), Math.max(min, max));
 
 function FieldBox({
   field,
+  number,
   page,
   viewport,
   editable,
@@ -174,6 +217,7 @@ function FieldBox({
   onRemove,
 }: {
   field: Field;
+  number: number;
   page: PDFPageProxy;
   viewport: PageViewport;
   editable: boolean;
@@ -225,22 +269,38 @@ function FieldBox({
     <div
       className={`field ${field.fieldType.toLowerCase()} ${selected ? 'selected' : ''} ${editable ? 'editable' : ''}`}
       style={box}
+      data-field-id={field.id}
       onPointerDown={(e) => startGesture(e, 'move')}
     >
-      <span className="field-label">{FIELD_LABELS[field.fieldType]}</span>
       {editable && (
         <>
+          <span className="field-tag">
+            <GripIcon /> Kéo để di chuyển
+          </span>
           <button
             type="button"
             className="field-remove"
-            title="Xoá ô ký"
+            title="Xoá ô ký (Delete)"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={onRemove}
           >
-            ×
+            <Icon name="trash" size={12} /> Xoá
           </button>
-          <span className="field-resize" onPointerDown={(e) => startGesture(e, 'resize')} />
         </>
+      )}
+      <span className="field-body">
+        <span className="field-title">
+          <Icon name={FIELD_ICONS[field.fieldType]} size={13} /> {FIELD_LABELS[field.fieldType]} #
+          {number}
+        </span>
+        {box.height >= 44 && box.width >= 120 && (
+          <span className="field-hint">
+            {editable ? FIELD_HINTS[field.fieldType] : 'Chờ duyệt trên Cas ID'}
+          </span>
+        )}
+      </span>
+      {editable && (
+        <span className="field-resize" onPointerDown={(e) => startGesture(e, 'resize')} />
       )}
     </div>
   );
