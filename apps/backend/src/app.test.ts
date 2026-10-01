@@ -1,15 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app';
 import type { CasClient } from './cas-client';
 import { loadEnv } from './env';
-import { Store } from './store';
 
-// Unit test cho logic của backend (xác thực, webhook, idempotent). Tích hợp CAS kiểm thử thật.
-const TOKEN = 'x'.repeat(40);
+// Unit test cho backend stateless (chuyển tiếp CAS, xác minh). Tích hợp CAS kiểm thử thật.
 const PDF = new TextEncoder().encode('%PDF-1.7\n...');
+const SIGN_ID = '4ec3397d-1b2c-4d5e-8f90-123456789abc';
 
 function fakeCas() {
   return {
@@ -18,7 +16,15 @@ function fakeCas() {
       qrContent: 'casid://sign?t=t' as string | undefined,
       shape: {},
     })),
-    requestStatus: vi.fn(),
+    requestStatus: vi.fn(async (signRequestId: string) => ({
+      signRequestId,
+      state: 'COMPLETED' as const,
+      lastUpdatedAt: null,
+      signedAt: '2026-09-28T02:04:18.000Z',
+      identityKey: 'b3f1e2c4-8a2d-4c1a-9e3f-1a2b3c4d5e6f' as string | null,
+      identityKeyExpiresAt: '2026-09-29T02:04:18.000Z' as string | null,
+      orgIdSigned: 'kysoqr.com#5xh7Oo' as string | null,
+    })),
     downloadFile: vi.fn(async () => PDF),
     signingRound: vi.fn(async () => ({ signingRound: {} })),
   } satisfies CasClient;
@@ -28,13 +34,16 @@ function multipart(meta: unknown, file: Uint8Array = PDF) {
   const boundary = '----kysoqr';
   const head = (name: string, extra = '') =>
     `--${boundary}\r\nContent-Disposition: form-data; name="${name}"${extra}\r\n`;
-  const body = Buffer.concat([
-    Buffer.from(`${head('meta')}\r\n${JSON.stringify(meta)}\r\n`),
+  const parts = [
+    ...(meta === undefined ? [] : [Buffer.from(`${head('meta')}\r\n${JSON.stringify(meta)}\r\n`)]),
     Buffer.from(`${head('file', '; filename="a.pdf"')}Content-Type: application/pdf\r\n\r\n`),
     Buffer.from(file),
     Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
-  return { body, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } };
+  ];
+  return {
+    body: Buffer.concat(parts),
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+  };
 }
 
 const meta = {
@@ -43,48 +52,30 @@ const meta = {
 };
 
 describe('backend', () => {
-  let dir: string;
-  let store: Store;
   let cas: ReturnType<typeof fakeCas>;
   let app: Awaited<ReturnType<typeof buildApp>>;
+  let tmpBefore: string[];
 
   beforeEach(async () => {
-    dir = mkdtempSync(join(tmpdir(), 'kysoqr-'));
-    store = new Store(dir);
+    tmpBefore = readdirSync(tmpdir());
     cas = fakeCas();
     const env = loadEnv({
       CAS_ESIGN_BASE_URL: 'https://sandbox.bankhub.dev',
       CAS_ESIGN_CLIENT_ID: 'c',
       CAS_ESIGN_API_KEY: 'k',
-      CAS_WEBHOOK_TOKEN: TOKEN,
-      DATA_DIR: dir,
     });
-    app = await buildApp({ env, store, cas });
+    app = await buildApp({ env, cas });
   });
 
   afterEach(async () => {
     await app.close();
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
   });
 
   async function create() {
     const res = await app.inject({ method: 'POST', url: '/api/sign-requests', ...multipart(meta) });
     expect(res.statusCode).toBe(201);
-    return res.json() as { signRequestId: string; accessToken: string };
+    return res.json() as { signRequestId: string };
   }
-
-  const webhook = (token: string, signRequest: object) =>
-    app.inject({
-      method: 'POST',
-      url: `/webhooks/cas-sign?token=${token}`,
-      payload: {
-        environment: 'dev',
-        webhookType: 'SIGN',
-        webhookCode: 'DEFAULT_UPDATE',
-        signRequest,
-      },
-    });
 
   it('tạo yêu cầu và gửi đúng dữ liệu sang CAS', async () => {
     const { signRequestId } = await create();
@@ -157,15 +148,6 @@ describe('backend', () => {
     );
   });
 
-  it('kiểm tra chứng thư: từ chối dữ liệu không phải chứng thư', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/certificates/check',
-      payload: { certificates: [Buffer.from('không phải chứng thư').toString('base64')] },
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
   it('từ chối file không phải PDF', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -175,76 +157,58 @@ describe('backend', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('không cho xem trạng thái khi sai accessToken', async () => {
-    const { signRequestId } = await create();
-    const res = await app.inject({
-      url: `/api/sign-requests/${signRequestId}`,
-      headers: { 'x-access-token': 'sai' },
+  it('trạng thái: trả thẳng identityKey và orgIdSigned từ CAS', async () => {
+    const res = await app.inject({ url: `/api/sign-requests/${SIGN_ID}` });
+    expect(cas.requestStatus).toHaveBeenCalledWith(SIGN_ID);
+    expect(res.json()).toMatchObject({
+      signRequestId: SIGN_ID,
+      state: 'COMPLETED',
+      identityKey: 'b3f1e2c4-8a2d-4c1a-9e3f-1a2b3c4d5e6f',
+      orgIdSigned: 'kysoqr.com#5xh7Oo',
     });
+  });
+
+  it('trạng thái: mã yêu cầu không phải UUID → 404, không gọi CAS', async () => {
+    const res = await app.inject({ url: '/api/sign-requests/abc' });
     expect(res.statusCode).toBe(404);
+    expect(cas.requestStatus).not.toHaveBeenCalled();
   });
 
-  it('webhook sai token bị từ chối', async () => {
-    const res = await webhook('sai', { signRequestId: 'x', state: 'COMPLETED' });
-    expect(res.statusCode).toBe(401);
-  });
-
-  it('webhook COMPLETED → tải file đúng 1 lần dù webhook gửi trùng', async () => {
-    const { signRequestId, accessToken } = await create();
-    const payload = {
-      signRequestId,
-      state: 'COMPLETED',
-      identityKey: 'b3f1e2c4-8a2d-4c1a-9e3f-1a2b3c4d5e6f',
-      identityKeyExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-      orgIdSigned: 'KSQ#123',
-    };
-    await Promise.all([webhook(TOKEN, payload), webhook(TOKEN, payload)]);
-    await app.signService.ensureDownloaded(signRequestId);
+  it('tải file đã ký: chuyển thẳng từ CAS, không ghi file nào ra đĩa', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/signed-file',
+      payload: { identityKey: 'b3f1e2c4-8a2d-4c1a-9e3f-1a2b3c4d5e6f' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.rawPayload.subarray(0, 5).toString()).toBe('%PDF-');
     expect(cas.downloadFile).toHaveBeenCalledTimes(1);
-
-    const status = await app.inject({
-      url: `/api/sign-requests/${signRequestId}`,
-      headers: { 'x-access-token': accessToken },
-    });
-    expect(status.json()).toMatchObject({
-      state: 'COMPLETED',
-      fileReady: true,
-      hasSigningRound: true,
-    });
-
-    const file = await app.inject({
-      url: `/api/sign-requests/${signRequestId}/file`,
-      headers: { 'x-access-token': accessToken },
-    });
-    expect(file.headers['content-type']).toBe('application/pdf');
-    expect(file.rawPayload.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(readdirSync(tmpdir())).toEqual(tmpBefore);
   });
 
-  it('job 5 giây: hỏi CAS và tải file khi đã ký, không cần webhook', async () => {
-    const { signRequestId } = await create();
-    cas.requestStatus = vi.fn(async () => ({
-      signRequestId,
-      state: 'COMPLETED' as const,
-      lastUpdatedAt: null,
-      signedAt: '2026-09-28T02:04:18.000Z',
-      identityKey: 'b3f1e2c4-8a2d-4c1a-9e3f-1a2b3c4d5e6f',
-      identityKeyExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-      orgIdSigned: 'kysoqr.com#5xh7Oo',
-    }));
-    store.update(signRequestId, { lastSyncedAt: 0 });
-    await app.signService.syncActive();
-    await app.signService.ensureDownloaded(signRequestId);
-    expect(store.get(signRequestId)).toMatchObject({
-      state: 'COMPLETED',
-      orgIdSigned: 'kysoqr.com#5xh7Oo',
+  it('tải file đã ký: CAS trả về thứ không phải PDF → 502', async () => {
+    cas.downloadFile.mockResolvedValueOnce(new TextEncoder().encode('oops'));
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/signed-file',
+      payload: { identityKey: 'k' },
     });
-    expect(store.get(signRequestId)?.filePath).toBeTruthy();
+    expect(res.statusCode).toBe(502);
   });
 
-  it('không lùi trạng thái COMPLETED về NEW', async () => {
-    const { signRequestId } = await create();
-    await webhook(TOKEN, { signRequestId, state: 'REJECTED' });
-    await webhook(TOKEN, { signRequestId, state: 'NEW' });
-    expect(store.get(signRequestId)?.state).toBe('REJECTED');
+  it('xác minh: PDF không có chữ ký → danh sách rỗng', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/verify', ...multipart(undefined) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ signatures: [] });
+  });
+
+  it('xác minh: từ chối file không phải PDF', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/verify',
+      ...multipart(undefined, new TextEncoder().encode('hello')),
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

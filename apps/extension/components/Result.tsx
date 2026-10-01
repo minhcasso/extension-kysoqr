@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getSigningRound, type SigningRound } from '../lib/api';
-import type { HistoryItem } from '../lib/storage';
+import type { SignRequestItem } from '../lib/storage';
 import { Icon } from './Icon';
 
-export function signedFileName(item: HistoryItem) {
+export function signedFileName(item: SignRequestItem) {
   return `${item.fileName.replace(/\.pdf$/i, '').replace(/_signed$/i, '')}_signed.pdf`;
 }
 
 export function ResultPanel({
   item,
   signed,
-  hasSigningRound,
+  orgIdSigned,
   onNew,
   onContinue,
 }: {
-  item: HistoryItem;
+  item: SignRequestItem;
   signed: Uint8Array;
-  hasSigningRound: boolean;
+  /** Có thì xem được thông tin phiên ký. */
+  orgIdSigned: string | null;
   onNew: () => void;
   /** Mở file vừa ký để thêm chữ ký tiếp (người ký khác, con dấu...). */
   onContinue: () => void;
@@ -29,9 +30,9 @@ export function ResultPanel({
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
 
   useEffect(() => {
-    if (!hasSigningRound) return;
-    getSigningRound(item.signRequestId, item.accessToken).then(setRound, () => setRound(null));
-  }, [hasSigningRound, item]);
+    if (!orgIdSigned) return;
+    getSigningRound(orgIdSigned).then(setRound, () => setRound(null));
+  }, [orgIdSigned]);
 
   return (
     <>
@@ -42,6 +43,9 @@ export function ResultPanel({
         <a className="sign-btn" href={url} download={signedFileName(item)}>
           <Icon name="download" size={18} /> Tải file đã ký
         </a>
+        <p className="muted small">
+          KysoQR không lưu file đã ký. Hãy tải về máy để giữ lại bản này.
+        </p>
       </section>
 
       <section className="card">
@@ -63,9 +67,9 @@ export function ResultPanel({
           </dl>
         ) : (
           <p className="muted small">
-            {hasSigningRound
+            {orgIdSigned
               ? 'Đang tải thông tin phiên ký…'
-              : 'Thông tin phiên ký (thiết bị, cách xác thực) sẽ có khi backend nhận webhook từ CAS. Chi tiết chữ ký và chuỗi chứng thư xem ở “Lịch sử ký”.'}
+              : 'Cas ID chưa trả về thông tin phiên ký. Chi tiết chữ ký và chuỗi chứng thư xem ở bảng Xác minh chữ ký (nút ☰).'}
           </p>
         )}
       </section>

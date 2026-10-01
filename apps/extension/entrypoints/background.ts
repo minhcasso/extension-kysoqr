@@ -41,6 +41,8 @@ export default defineBackground(() => {
 
   browser.runtime.onInstalled.addListener(({ reason }) => {
     if (reason === 'install') void browser.runtime.openOptionsPage();
+    // Tính năng "Yêu cầu ký gần đây" đã bỏ: xoá lịch sử còn sót lại từ bản cũ.
+    void browser.storage.local.remove('history');
   });
 
   // "Mở bằng trình xem của Chrome" từ trang viewer.

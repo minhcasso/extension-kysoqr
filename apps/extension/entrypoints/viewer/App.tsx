@@ -4,20 +4,25 @@ import {
   MAX_SCALE,
   MIN_SCALE,
   type DocumentControls,
+  type FitMode,
 } from '../../components/DocumentView';
 import type { Field } from '../../components/PdfViewer';
 import { ReaderToolbar, type MenuItem, type VerifyTone } from '../../components/ReaderToolbar';
 import { ResultPanel, signedFileName } from '../../components/Result';
-import { RecentRequests, SignDrawer } from '../../components/SignDrawer';
-import { SignatureSidebar, VERDICTS } from '../../components/SignatureSidebar';
+import { SignDrawer } from '../../components/SignDrawer';
+import { SignatureSidebar, VERDICTS, type SidebarPanel } from '../../components/SignatureSidebar';
 import { SigningStatus } from '../../components/SigningStatus';
 import { SignPanel, SourceErrorBox, UploadCard } from '../../components/SignPanel';
 import { isPasswordError, openPdf, type PDFDocumentProxy } from '../../lib/pdf';
 import { defaultField } from '../../lib/placement';
 import type { BackgroundMessage } from '../../lib/settings';
 import { loadFromFile, loadFromUrl, readJob, type PdfSource } from '../../lib/source';
-import type { HistoryItem } from '../../lib/storage';
+import type { SignRequestItem } from '../../lib/storage';
+import { scrollWithin } from '../../lib/scroll';
 import { useSignatures, verdict } from '../../lib/useSignatures';
+import { printPdf } from '../../lib/print';
+import { loadTabDoc, saveTabDoc } from '../../lib/docCache';
+import { DocumentProperties } from '../../components/DocumentProperties';
 
 interface OpenDoc {
   source: PdfSource;
@@ -27,10 +32,10 @@ interface OpenDoc {
 
 type SignStage =
   | { kind: 'edit' }
-  | { kind: 'signing'; item: HistoryItem }
-  | { kind: 'done'; item: HistoryItem; signed: Uint8Array; hasSigningRound: boolean };
+  | { kind: 'signing'; item: SignRequestItem }
+  | { kind: 'done'; item: SignRequestItem; signed: Uint8Array; orgIdSigned: string | null };
 
-type Drawer = 'closed' | 'sign' | 'history';
+type Drawer = 'closed' | 'sign';
 
 const jobId = new URLSearchParams(location.search).get('job');
 const STEP: Record<SignStage['kind'], number> = { edit: 0, signing: 1, done: 2 };
@@ -49,12 +54,18 @@ export function App() {
 
   const [scale, setScale] = useState<number | null>(null);
   const [userZoomed, setUserZoomed] = useState(false);
+  const [fitMode, setFitMode] = useState<FitMode>('width');
+  const [rotation, setRotation] = useState(0);
+  const [twoPage, setTwoPage] = useState(false);
+  const [annotations, setAnnotations] = useState(true);
+  const [printing, setPrinting] = useState(false);
+  const [showProps, setShowProps] = useState(false);
   const [page, setPage] = useState(1);
   const controls = useRef<DocumentControls | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const signatures = useSignatures(doc?.source.bytes ?? null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [panel, setPanel] = useState<'none' | SidebarPanel>('none');
 
   // PDF có chữ ký số → tự mở bảng xác minh (một lần cho mỗi file); không có → không hiện gì.
   const autoOpenedFor = useRef<Uint8Array | null>(null);
@@ -63,14 +74,21 @@ export function App() {
     const bytes = doc?.source.bytes ?? null;
     if (hasSignatures && bytes && autoOpenedFor.current !== bytes) {
       autoOpenedFor.current = bytes;
-      setSidebarOpen(true);
+      setPanel('verify');
     }
   }, [hasSignatures, doc]);
 
   const showDoc = useCallback((next: OpenDoc) => {
     document.title = next.source.name;
     setDoc(next);
-    setSidebarOpen(false);
+    // Giữ tài liệu (cả bản vừa ký) để tải lại trang vẫn mở đúng file này.
+    void saveTabDoc({
+      name: next.source.name,
+      bytes: next.source.bytes,
+      originalUrl: next.originalUrl,
+    });
+    setPanel('none');
+    setRotation(0);
     setUserZoomed(false);
     setFields([]);
     setSelectedId(null);
@@ -100,10 +118,16 @@ export function App() {
   }
 
   useEffect(() => {
-    void readJob(jobId).then((job) => {
+    void (async () => {
+      // Tải lại trang: mở lại đúng tài liệu tab đang xem (file chọn từ máy, bản vừa ký...).
+      const cached = await loadTabDoc();
+      if (cached) {
+        return openSource(async () => ({ bytes: cached.bytes, name: cached.name }), cached.originalUrl);
+      }
+      const job = await readJob(jobId);
       if (!job) return setLoading(null);
       void openSource(() => loadFromUrl(job), job.url);
-    });
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -128,6 +152,21 @@ export function App() {
     controls.current?.fit();
   };
 
+  /** Đặt tỷ lệ từ ô % trên thanh công cụ. */
+  const setZoom = (value: number) => {
+    setUserZoomed(true);
+    setScale(Math.round(Math.min(MAX_SCALE, Math.max(MIN_SCALE, value)) * 100) / 100);
+  };
+
+  /** Như Chrome: chuyển giữa vừa chiều ngang và vừa trang (DocumentView tự vừa khít lại). */
+  const toggleFit = () => {
+    setUserZoomed(false);
+    setFitMode((m) => (m === 'width' ? 'page' : 'width'));
+  };
+
+  /** Xoay chỉ để xem: tỷ lệ ô ký tính trên trang gốc nên file gửi ký không đổi. */
+  const rotate = (delta: number) => setRotation((r) => (r + delta + 360) % 360);
+
   /** Đặt sẵn một ô chữ ký gần cuối trang đang đọc và cuộn nhẹ để ô đó hiện ra. */
   async function placeDefault(current: Field[]) {
     if (!doc) return;
@@ -136,9 +175,12 @@ export function App() {
     setSelectedId(field.id);
     // Chờ bảng ký mở xong (khung xem hẹp lại, trang được vẽ lại theo tỷ lệ mới).
     setTimeout(() => {
-      document
-        .querySelector(`[data-field-id="${field.id}"]`)
-        ?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+      scrollWithin(
+        document.querySelector<HTMLElement>('.doc-scroll'),
+        document.querySelector(`[data-field-id="${field.id}"]`),
+        'center',
+        'smooth',
+      );
     }, 350);
   }
 
@@ -154,9 +196,9 @@ export function App() {
     if (sign.kind === 'edit' && fields.length === 0) void placeDefault(fields);
   }
 
-  async function onSigned(item: HistoryItem, signed: Uint8Array, hasSigningRound: boolean) {
+  async function onSigned(item: SignRequestItem, signed: Uint8Array, orgIdSigned: string | null) {
     showDoc({ source: { bytes: signed, name: signedFileName(item) }, pdf: await openPdf(signed) });
-    setSign({ kind: 'done', item, signed, hasSigningRound });
+    setSign({ kind: 'done', item, signed, orgIdSigned });
     setDrawer('sign');
   }
 
@@ -169,6 +211,16 @@ export function App() {
       } else if (mod && e.key === '-') {
         e.preventDefault();
         zoom(1 / 1.1);
+      } else if (mod && e.key === '\\') {
+        e.preventDefault();
+        toggleFit();
+      } else if (mod && (e.key === '[' || e.key === ']')) {
+        e.preventDefault();
+        rotate(e.key === '[' ? -90 : 90);
+      } else if (mod && e.key.toLowerCase() === 'p') {
+        // Thay lệnh in của trình duyệt (vốn in cả giao diện) bằng in nội dung tài liệu.
+        e.preventDefault();
+        printRef.current();
       } else if (mod && e.key === '0') {
         e.preventDefault();
         fit();
@@ -190,22 +242,84 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, sign.kind, drawer, zoom]);
 
-  const downloadUrl = useMemo(
-    () =>
-      doc
-        ? URL.createObjectURL(new Blob([doc.source.bytes.slice()], { type: 'application/pdf' }))
-        : null,
-    [doc],
-  );
-  useEffect(() => () => void (downloadUrl && URL.revokeObjectURL(downloadUrl)), [downloadUrl]);
 
   const verifyTone = useMemo<VerifyTone>(() => {
     const tones = signatures.items.map((it) => VERDICTS[verdict(it)].tone as VerifyTone);
     return TONE_RANK.find((t) => tones.includes(t)) ?? 'neutral';
   }, [signatures.items]);
 
+  // Nút ☰: PDF chưa ký thì như trình xem PDF thường (không có mục xác minh).
+  const sidebarItems: MenuItem[] = [
+    {
+      label: 'Thu nhỏ',
+      icon: 'sidebarClose',
+      checked: panel === 'none',
+      onClick: () => setPanel('none'),
+    },
+    ...(signatures.items.length > 0
+      ? [
+          {
+            label: 'Xác minh chữ ký',
+            icon: 'shield' as const,
+            checked: panel === 'verify',
+            onClick: () => setPanel('verify'),
+          },
+        ]
+      : []),
+    {
+      label: 'Preview',
+      icon: 'pages',
+      checked: panel === 'pages',
+      onClick: () => setPanel('pages'),
+    },
+  ];
+
+  function print() {
+    if (!doc || printing) return;
+    setPrinting(true);
+    printPdf(doc.pdf)
+      .catch((e: unknown) => alert(e instanceof Error ? e.message : String(e)))
+      .finally(() => setPrinting(false));
+  }
+  // Phím tắt Ctrl+P đăng ký một lần, nên luôn gọi bản `print` mới nhất (đúng tài liệu đang mở).
+  const printRef = useRef(print);
+  printRef.current = print;
+
+  // Giống menu ⋮ của trình xem PDF Chrome, rồi tới các mục riêng của KysoQR.
   const menu: MenuItem[] = [
-    { label: 'Mở file PDF khác', icon: 'upload', onClick: () => fileInput.current?.click() },
+    ...(doc
+      ? [
+          {
+            label: 'Xem 2 trang',
+            icon: 'columns' as const,
+            checked: twoPage,
+            onClick: () => setTwoPage((v) => !v),
+          },
+          {
+            label: 'Chú thích',
+            icon: 'message' as const,
+            checked: annotations,
+            onClick: () => setAnnotations((v) => !v),
+          },
+          {
+            label: 'Trình chiếu',
+            icon: 'present' as const,
+            divider: true,
+            onClick: () => controls.current?.present(),
+          },
+          {
+            label: 'Thuộc tính tài liệu',
+            icon: 'fileInfo' as const,
+            onClick: () => setShowProps(true),
+          },
+        ]
+      : []),
+    {
+      label: 'Mở file PDF khác',
+      icon: 'upload',
+      divider: Boolean(doc),
+      onClick: () => fileInput.current?.click(),
+    },
     ...(doc?.originalUrl
       ? [
           {
@@ -220,7 +334,6 @@ export function App() {
           },
         ]
       : []),
-    { label: 'Yêu cầu ký gần đây', icon: 'history', onClick: () => setDrawer('history') },
     { label: 'Cài đặt', icon: 'settings', onClick: () => void browser.runtime.openOptionsPage() },
   ];
 
@@ -249,7 +362,7 @@ export function App() {
       <SigningStatus
         item={sign.item}
         onRestart={() => setSign({ kind: 'edit' })}
-        onDone={(signed, status) => void onSigned(sign.item, signed, status.hasSigningRound)}
+        onDone={(signed, orgIdSigned) => void onSigned(sign.item, signed, orgIdSigned)}
       />
     );
   } else if (sign.kind === 'done') {
@@ -257,7 +370,7 @@ export function App() {
       <ResultPanel
         item={sign.item}
         signed={sign.signed}
-        hasSigningRound={sign.hasSigningRound}
+        orgIdSigned={sign.orgIdSigned}
         onNew={() => fileInput.current?.click()}
         onContinue={() => {
           setSign({ kind: 'edit' });
@@ -282,13 +395,13 @@ export function App() {
       />
       <ReaderToolbar
         fileName={doc?.source.name ?? null}
-        verify={
-          signatures.items.length > 0
+        sidebar={
+          doc
             ? {
+                items: sidebarItems,
+                open: panel !== 'none',
                 count: signatures.items.length,
                 tone: verifyTone,
-                open: sidebarOpen,
-                onToggle: () => setSidebarOpen((o) => !o),
               }
             : null
         }
@@ -300,19 +413,32 @@ export function App() {
                 onJump: (p) => controls.current?.jump(p),
                 scale,
                 onZoom: zoom,
-                onFit: fit,
+                onSetScale: setZoom,
+                fitMode,
+                onToggleFit: toggleFit,
+                onRotate: rotate,
               }
             : null
         }
-        download={doc && downloadUrl ? { url: downloadUrl, name: doc.source.name } : null}
+        download={doc ? { bytes: doc.source.bytes, name: doc.source.name } : null}
+        print={doc ? { onPrint: print, busy: printing } : null}
         menu={menu}
         onSign={doc ? onSignClick : null}
         signing={drawer === 'sign'}
       />
 
       <div className="reader-body">
-        {sidebarOpen && signatures.items.length > 0 && (
-          <SignatureSidebar signatures={signatures} onClose={() => setSidebarOpen(false)} />
+        {doc && panel !== 'none' && (
+          <SignatureSidebar
+            panel={panel}
+            signatures={signatures}
+            doc={doc.pdf}
+            page={page}
+            onJump={(p) => controls.current?.jump(p)}
+            rotation={rotation}
+            annotations={annotations}
+            onClose={() => setPanel('none')}
+          />
         )}
 
         <main
@@ -337,6 +463,10 @@ export function App() {
             onPageChange={setPage}
             controlsRef={controls}
             autoFit={!userZoomed}
+            fitMode={fitMode}
+            rotation={rotation}
+            twoPage={twoPage}
+            annotations={annotations}
             fields={signMode ? fields : []}
             onFieldsChange={editing ? setFields : undefined}
             placing={editing && placing ? 'SIGNATURE' : null}
@@ -368,6 +498,15 @@ export function App() {
           />
         </main>
 
+        {showProps && doc && (
+          <DocumentProperties
+            doc={doc.pdf}
+            fileName={doc.source.name}
+            fileSize={doc.source.bytes.length}
+            onClose={() => setShowProps(false)}
+          />
+        )}
+
         {/* Luôn giữ bảng ký trong cây để không mất dữ liệu đã nhập khi đóng rồi mở lại. */}
         <div className={`drawer-slot ${drawer === 'sign' ? 'open' : ''}`}>
           {drawerContent && (
@@ -376,20 +515,6 @@ export function App() {
             </SignDrawer>
           )}
         </div>
-        {drawer === 'history' && (
-          <div className="drawer-slot open">
-            <SignDrawer step={null} title="Yêu cầu ký gần đây" onClose={() => setDrawer('closed')}>
-              <RecentRequests
-                onOpen={(item) => {
-                  setFields([]);
-                  setPlacing(false);
-                  setSign({ kind: 'signing', item });
-                  setDrawer('sign');
-                }}
-              />
-            </SignDrawer>
-          </div>
-        )}
       </div>
     </div>
   );

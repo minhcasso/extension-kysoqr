@@ -1,30 +1,37 @@
 import type { SignRequestStatusResponse } from '@kysoqr/shared';
-import { toDataURL } from 'qrcode';
 import { useEffect, useState } from 'react';
 import { getSignedFile, getStatus } from '../lib/api';
-import { updateHistoryState, type HistoryItem } from '../lib/storage';
+import type { SignRequestItem } from '../lib/storage';
 
 const FAST_POLL_MS = 2_000;
 const SLOW_POLL_MS = 5_000;
 const FAST_PHASE_MS = 60_000;
+
+/** LINK_EXPIRED: đã ký xong nhưng CAS không còn cho tải file (quá hạn hoặc hết 5 lần tải). */
+type ViewState = SignRequestStatusResponse['state'] | 'EXPIRED' | 'LINK_EXPIRED';
+
+const isPast = (at: string | undefined | null) => Boolean(at && Date.parse(at) < Date.now());
 
 export function SigningStatus({
   item,
   onDone,
   onRestart,
 }: {
-  item: HistoryItem;
-  onDone: (signed: Uint8Array, status: SignRequestStatusResponse) => void;
+  item: SignRequestItem;
+  onDone: (signed: Uint8Array, orgIdSigned: string | null) => void;
   onRestart: () => void;
 }) {
   const [qr, setQr] = useState<string | null>(null);
-  const [status, setStatus] = useState<SignRequestStatusResponse | null>(null);
+  const [status, setStatus] = useState<ViewState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     if (!item.qrContent) return;
-    toDataURL(item.qrContent, { width: 260, margin: 1 }).then(setQr, () => setQr(null));
+    // Nạp thư viện QR chỉ khi cần hiện mã.
+    import('qrcode')
+      .then(({ toDataURL }) => toDataURL(item.qrContent, { width: 260, margin: 1 }))
+      .then(setQr, () => setQr(null));
   }, [item.qrContent]);
 
   useEffect(() => {
@@ -38,19 +45,28 @@ export function SigningStatus({
     let timer: ReturnType<typeof setTimeout>;
     const startedAt = Date.now();
 
+    /** Tải file đúng một lần rồi giao cho trang (bản đã ký nằm trong bộ nhớ để xem / ký tiếp). */
+    async function download(identityKey: string, orgIdSigned: string | null) {
+      setStatus('COMPLETED');
+      try {
+        const signed = await getSignedFile(identityKey);
+        if (!stopped) onDone(signed, orgIdSigned);
+      } catch {
+        if (!stopped) setStatus('LINK_EXPIRED');
+      }
+    }
+
     async function tick() {
       try {
-        const s = await getStatus(item.signRequestId, item.accessToken);
+        const s = await getStatus(item.signRequestId);
         if (stopped) return;
-        setStatus(s);
         setError(null);
-        void updateHistoryState(item.signRequestId, s.expired ? 'EXPIRED' : s.state);
-        if (s.state === 'COMPLETED' && s.fileReady) {
-          const signed = await getSignedFile(item.signRequestId, item.accessToken);
-          if (!stopped) onDone(signed, s);
-          return;
+        const expired = s.state === 'NEW' && isPast(item.expiresAt);
+        setStatus(expired ? 'EXPIRED' : s.state);
+        if (s.state === 'COMPLETED' && s.identityKey) {
+          return void download(s.identityKey, s.orgIdSigned);
         }
-        if (s.state === 'REJECTED' || s.expired) return;
+        if (s.state === 'REJECTED' || expired) return;
       } catch (e) {
         if (stopped) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -67,10 +83,14 @@ export function SigningStatus({
   }, [item.signRequestId]);
 
   const remainingMs = Date.parse(item.expiresAt) - now;
-  const state =
-    status?.expired || (remainingMs <= 0 && status?.state === 'NEW')
-      ? 'EXPIRED'
-      : (status?.state ?? item.state ?? 'NEW');
+  const state: ViewState =
+    status === 'NEW' || (!status && (item.state ?? 'NEW') === 'NEW')
+      ? remainingMs <= 0
+        ? 'EXPIRED'
+        : 'NEW'
+      : (status ?? (item.state as ViewState));
+
+  const done = state === 'REJECTED' || state === 'EXPIRED' || state === 'LINK_EXPIRED';
 
   return (
     <>
@@ -123,11 +143,15 @@ export function SigningStatus({
         {state === 'EXPIRED' && (
           <p className="lead error-text">Yêu cầu ký đã hết hạn (quá 30 phút).</p>
         )}
+        {state === 'LINK_EXPIRED' && (
+          <p className="lead error-text">
+            Tài liệu đã được ký, nhưng không tải được file đã ký từ Cas ID. Vui lòng thử ký lại.
+          </p>
+        )}
 
         {(state === 'ACCEPTED' || state === 'COMPLETED') && (
           <p className="muted small">
-            Bạn có thể đóng tab này. File đã ký vẫn được lưu và mở lại được ở “Lịch sử ký” › “Yêu
-            cầu ký gần đây”.
+            Giữ tab này mở cho tới khi tải xong file đã ký.
           </p>
         )}
         {error && <div className="error">{error} Đang thử lại…</div>}
@@ -136,10 +160,10 @@ export function SigningStatus({
 
       <button
         type="button"
-        className={state === 'REJECTED' || state === 'EXPIRED' ? 'sign-btn' : 'btn-outline wide'}
+        className={done ? 'sign-btn' : 'btn-outline wide'}
         onClick={onRestart}
       >
-        {state === 'REJECTED' || state === 'EXPIRED'
+        {done
           ? 'Tạo yêu cầu mới'
           : 'Huỷ, quay lại chỉnh vị trí ký'}
       </button>

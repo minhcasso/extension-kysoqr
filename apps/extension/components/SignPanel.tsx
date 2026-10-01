@@ -2,7 +2,7 @@ import { CreateSignRequestMeta, MAX_PDF_BYTES, type SignerKind } from '@kysoqr/s
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { createSignRequest } from '../lib/api';
 import type { PdfSource, SourceError } from '../lib/source';
-import { getSavedCccd, setSavedCccd, upsertHistory, type HistoryItem } from '../lib/storage';
+import { getSavedCccd, setSavedCccd, type SignRequestItem } from '../lib/storage';
 import { Icon } from './Icon';
 import { FIELD_ICONS, FIELD_LABELS, fieldNumber, type Field } from './PdfViewer';
 
@@ -108,7 +108,7 @@ export function SignPanel({
   /** Đang chờ người dùng bấm vào trang để thêm ô ký. */
   placing: boolean;
   onTogglePlacing: () => void;
-  onSubmitted: (item: HistoryItem) => void;
+  onSubmitted: (item: SignRequestItem) => void;
 }) {
   const [documentName, setDocumentName] = useState(() => defaultDocumentName(source.name));
   const [language, setLanguage] = useState<'vi' | 'en'>('vi');
@@ -160,9 +160,8 @@ export function SignPanel({
         rememberCccd && meta.data.identificationNumber ? meta.data.identificationNumber : null,
       );
       const res = await createSignRequest(source.bytes, source.name, meta.data);
-      const item: HistoryItem = {
+      const item: SignRequestItem = {
         signRequestId: res.signRequestId,
-        accessToken: res.accessToken,
         documentName: meta.data.documentName,
         fileName: source.name,
         qrContent: res.qrContent,
@@ -171,7 +170,6 @@ export function SignPanel({
         expiresAt: res.expiresAt,
         state: res.state,
       };
-      await upsertHistory(item);
       onSubmitted(item);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

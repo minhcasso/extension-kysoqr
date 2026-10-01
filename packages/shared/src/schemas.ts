@@ -60,13 +60,13 @@ export type SignRequestState = z.infer<typeof SignRequestState>;
 
 export const isTerminalState = (s: SignRequestState) => s === 'REJECTED' || s === 'COMPLETED';
 
-/** Response của backend KysoQR cho extension. */
+/** Response của backend KysoQR cho extension. Backend không lưu gì: mọi trạng thái lấy thẳng từ CAS. */
 export interface CreateSignRequestResponse {
   signRequestId: string;
-  accessToken: string;
   qrContent: string;
   state: SignRequestState;
   pushSent: boolean;
+  /** QR / yêu cầu ký hết hạn lúc này (extension tự tính `expired`). */
   expiresAt: string;
 }
 
@@ -74,63 +74,60 @@ export interface SignRequestStatusResponse {
   signRequestId: string;
   state: SignRequestState;
   signedAt: string | null;
-  expiresAt: string;
-  /** Quá 30 phút mà chưa ký/từ chối. */
-  expired: boolean;
-  /** true khi backend đã tải và lưu xong file đã ký. */
-  fileReady: boolean;
-  /** true khi đã có orgIdSigned (từ webhook) để xem thông tin phiên ký. */
-  hasSigningRound: boolean;
+  /** Có khi COMPLETED: dùng để tải file đã ký (CAS cho tối đa 5 lần, có hạn dùng). */
+  identityKey: string | null;
+  identityKeyExpiresAt: string | null;
+  /** Có khi COMPLETED: dùng để xem thông tin phiên ký. */
+  orgIdSigned: string | null;
 }
 
-/** Kiểm tra chuỗi chứng thư số (chuỗi tin cậy + OCSP + CRL) do backend làm. */
-export const CertificateCheckRequest = z.object({
-  /** Chứng thư DER (base64) lấy từ chữ ký trong PDF; phần tử đầu là chứng thư người ký. */
-  certificates: z.array(z.string().max(40_000)).min(1).max(10),
-  /** Thời điểm ký (ISO), để xét hiệu lực chứng thư tại lúc ký. */
-  signedAt: z.string().datetime({ offset: true }).optional(),
-});
-export type CertificateCheckRequest = z.infer<typeof CertificateCheckRequest>;
+/** Kết quả xác minh chữ ký (giống hệt Xsign/kysoqr `verifyPdfSignatures`). */
+export type VerificationStatus =
+  | 'SIGNED_VALID'
+  | 'CONTENT_DIGEST_MISMATCH'
+  | 'CHAIN_VALIDATION_FAILED'
+  | 'ROOT_NOT_TRUSTED'
+  | 'SIGNATURE_INVALID'
+  | 'TRUST_STORE_NOT_CONFIGURED'
+  | 'UNSUPPORTED_SUBFILTER'
+  | 'UNSUPPORTED_ALGORITHM';
 
-export type RevocationStatus =
-  /** Chưa bị thu hồi. */
-  | 'good'
-  | 'revoked'
-  /** Máy chủ OCSP không biết chứng thư này. */
-  | 'unknown'
-  /** Có địa chỉ nhưng không kiểm tra được (mạng, phản hồi sai, chữ ký phản hồi không hợp lệ...). */
-  | 'error'
-  /** Thiếu chứng thư của tổ chức phát hành nên không tạo được yêu cầu. */
-  | 'unsupported'
-  /** Chứng thư không khai báo địa chỉ OCSP/CRL (thường là chứng thư gốc). */
-  | 'none';
-
-export interface RevocationResult {
-  status: RevocationStatus;
+export interface RevocationCheckResult {
+  status: 'not_revoked' | 'revoked' | 'unavailable';
   url: string | null;
-  revokedAt?: string;
-  detail?: string;
 }
 
-export interface ChainCertificate {
-  /** DER base64. */
-  der: string;
-  /** Có trong PDF, hay backend lấy thêm từ kho tin cậy / địa chỉ caIssuers. */
-  source: 'document' | 'trust-store' | 'aia';
-  /** Chữ ký của chứng thư này hợp lệ theo khoá công khai của chứng thư cấp trên. */
-  signatureValid: boolean | null;
-  ocsp: RevocationResult;
-  crl: RevocationResult;
+export interface ChainCertInfo {
+  index: number;
+  subject: string;
+  issuer: string;
+  serialNumber: string;
+  validFrom: string;
+  validTo: string;
+  isCa: boolean;
+  /** `null` với chứng thư gốc. */
+  ocsp: RevocationCheckResult | null;
+  crl: RevocationCheckResult | null;
 }
 
-export interface CertificateCheckResponse {
-  /** Từ chứng thư người ký lên tới chứng thư gốc (nếu tìm được). */
-  chain: ChainCertificate[];
-  /** Chuỗi kết thúc ở một chứng thư gốc có trong kho tin cậy của máy chủ. */
-  trusted: boolean;
-  /** Máy chủ chưa cấu hình kho chứng thư gốc tin cậy. */
-  trustStoreConfigured: boolean;
-  /** Mọi chữ ký trong chuỗi hợp lệ và các chứng thư còn hiệu lực tại thời điểm ký. */
-  chainValid: boolean;
-  chainError?: string;
+export interface VerificationResult {
+  status: VerificationStatus;
+  message: string;
+  signedAt?: string;
+  certificate?: {
+    subject: string;
+    issuer: string;
+    serialNumber: string;
+    validFrom: string;
+    validTo: string;
+  };
+  certificateChain?: ChainCertInfo[];
+  certificateChainRootNotInTrustStore?: boolean;
+  /** Chỉ để hiển thị: chứng thư đã hết hạn tính tới hôm nay (chữ ký vẫn hợp lệ nếu còn hạn lúc ký). */
+  certificateExpiredNow?: boolean;
+  contentIntact?: boolean;
+}
+
+export interface VerifyResponse {
+  signatures: VerificationResult[];
 }

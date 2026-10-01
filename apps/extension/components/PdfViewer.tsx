@@ -9,7 +9,7 @@ import {
 } from '@kysoqr/shared';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { DEFAULT_BOX } from '../lib/placement';
-import { TextLayer, type PDFDocumentProxy, type PDFPageProxy, type PageViewport } from '../lib/pdf';
+import { AnnotationMode, TextLayer, type PDFDocumentProxy, type PDFPageProxy, type PageViewport } from '../lib/pdf';
 import { GripIcon, Icon, type IconName } from './Icon';
 
 export interface Field {
@@ -49,6 +49,12 @@ const MIN_BOX_PX = 24;
 interface Props {
   doc: PDFDocumentProxy;
   scale: number;
+  /** Góc xoay thêm (độ), chỉ để xem. */
+  rotation?: number;
+  /** Xem 2 trang cạnh nhau. */
+  twoPage?: boolean;
+  /** Vẽ chú thích (annotation) trên trang, kể cả hình chữ ký. Mặc định bật. */
+  annotations?: boolean;
   fields?: Field[];
   onFieldsChange?: (fields: Field[]) => void;
   placing?: FieldType | null;
@@ -60,7 +66,7 @@ interface Props {
 export function PdfViewer(props: Props) {
   const pages = Array.from({ length: props.doc.numPages }, (_, i) => i + 1);
   return (
-    <div className="pages">
+    <div className={`pages ${props.twoPage ? 'two' : ''}`}>
       {pages.map((n) => (
         <PageView key={n} pageNumber={n} {...props} />
       ))}
@@ -72,6 +78,8 @@ function PageView({
   doc,
   pageNumber,
   scale,
+  rotation = 0,
+  annotations = true,
   fields = [],
   onFieldsChange,
   placing,
@@ -104,7 +112,7 @@ function PageView({
     return () => io.disconnect();
   }, []);
 
-  const viewport = page?.getViewport({ scale });
+  const viewport = page?.getViewport({ scale, rotation: (page.rotate + rotation) % 360 });
 
   useEffect(() => {
     if (!page || !viewport || !visible || !canvasRef.current) return;
@@ -116,13 +124,14 @@ function PageView({
       canvasContext: canvas.getContext('2d')!,
       viewport,
       transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+      annotationMode: annotations ? AnnotationMode.ENABLE : AnnotationMode.DISABLE,
     });
     task.promise.catch(() => {
       // bị huỷ do đổi zoom
     });
     return () => task.cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, scale, visible]);
+  }, [page, scale, rotation, annotations, visible]);
 
   useEffect(() => {
     const container = textRef.current;
@@ -138,7 +147,7 @@ function PageView({
     });
     return () => layer.cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, scale, visible]);
+  }, [page, scale, rotation, visible]);
 
   const size = viewport
     ? { width: viewport.width, height: viewport.height }

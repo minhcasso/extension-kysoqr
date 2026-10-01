@@ -7,7 +7,7 @@
     "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "start": "tsx --env-file-if-exists=.env src/main.ts",
     "typecheck": "tsc --noEmit",
-    "webhook-url": "tsx --env-file-if-exists=.env src/webhook-url.ts"
+    "gen:certs": "node scripts/generateCertManifest.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
@@ -16,11 +16,13 @@
     "@kysoqr/shared": "*",
     "asn1js": "^3.0.10",
     "fastify": "^5.1.0",
+    "node-forge": "^1.4.0",
     "pkijs": "^3.4.1",
     "tsx": "^4.19.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^22.9.0"
+    "@types/node": "^22.9.0",
+    "@types/node-forge": "^1.3.14"
   }
 }

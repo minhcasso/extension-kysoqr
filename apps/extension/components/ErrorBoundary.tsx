@@ -18,9 +18,6 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
       <div className="center-card">
         <h2>Đã có lỗi xảy ra</h2>
         <div className="error">{this.state.error.message}</div>
-        <p className="muted small">
-          Yêu cầu ký đã gửi (nếu có) vẫn được lưu trong “Yêu cầu ký gần đây”.
-        </p>
         <button type="button" className="primary" onClick={() => location.reload()}>
           Tải lại trang
         </button>

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { MAX_SCALE, MIN_SCALE, type FitMode } from './DocumentView';
 import { Icon } from './Icon';
 
 export type VerifyTone = 'ok' | 'warn' | 'bad' | 'neutral';
@@ -35,13 +36,62 @@ function PageNav({
   );
 }
 
+/** Ô % zoom sửa được như Chrome: gõ số rồi Enter. */
+function ZoomInput({
+  scale,
+  onSetScale,
+}: {
+  scale: number | null;
+  onSetScale: (scale: number) => void;
+}) {
+  const pct = scale ? Math.round(scale * 100) : 100;
+  const [draft, setDraft] = useState(`${pct}%`);
+  useEffect(() => setDraft(`${pct}%`), [pct]);
+  const commit = () => {
+    const n = Number(draft.replace(/\D/g, ''));
+    const next = n ? Math.min(MAX_SCALE * 100, Math.max(MIN_SCALE * 100, n)) : pct;
+    setDraft(`${next}%`);
+    if (next !== pct) onSetScale(next / 100);
+  };
+  return (
+    <span className="rt-zoom">
+      <input
+        value={draft}
+        inputMode="numeric"
+        aria-label="Tỷ lệ phóng to"
+        onChange={(e) => setDraft(e.target.value.replace(/[^\d%]/g, ''))}
+        onBlur={commit}
+        onFocus={(e) => e.target.select()}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+      />
+    </span>
+  );
+}
+
 export interface MenuItem {
   label: string;
   icon: Parameters<typeof Icon>[0]['name'];
   onClick: () => void;
+  /** Lựa chọn đang dùng (hiện dấu ✓). */
+  checked?: boolean;
+  /** Kẻ một đường ngang phía trên mục này (tách nhóm). */
+  divider?: boolean;
 }
 
-function OverflowMenu({ items }: { items: MenuItem[] }) {
+/** Menu thả xuống dùng chung cho nút ☰ (căn trái) và ⋮ (căn phải). */
+function DropdownMenu({
+  items,
+  align,
+  label,
+  className = '',
+  children,
+}: {
+  items: MenuItem[];
+  align: 'left' | 'right';
+  label: string;
+  className?: string;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -59,31 +109,30 @@ function OverflowMenu({ items }: { items: MenuItem[] }) {
     <div className="rt-menu-wrap" ref={ref}>
       <button
         type="button"
-        className="rt-btn"
-        aria-label="Thêm"
-        title="Thêm"
+        className={`rt-btn ${className}`}
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <circle cx="12" cy="5" r="1.8" />
-          <circle cx="12" cy="12" r="1.8" />
-          <circle cx="12" cy="19" r="1.8" />
-        </svg>
+        {children}
       </button>
       {open && (
-        <ul className="rt-menu" role="menu">
+        <ul className={`rt-menu ${align}`} role="menu">
           {items.map((it) => (
-            <li key={it.label}>
+            <li key={it.label} className={it.divider ? 'rt-menu-sep' : undefined}>
               <button
                 type="button"
-                role="menuitem"
+                role={it.checked === undefined ? 'menuitem' : 'menuitemradio'}
+                aria-checked={it.checked}
                 onClick={() => {
                   setOpen(false);
                   it.onClick();
                 }}
               >
-                <Icon name={it.icon} size={16} /> {it.label}
+                <Icon name={it.icon} size={16} /> <span className="rt-menu-label">{it.label}</span>
+                {it.checked && <Icon name="check" size={16} className="rt-menu-check" />}
               </button>
             </li>
           ))}
@@ -93,27 +142,45 @@ function OverflowMenu({ items }: { items: MenuItem[] }) {
   );
 }
 
+function OverflowMenu({ items }: { items: MenuItem[] }) {
+  return (
+    <DropdownMenu items={items} align="right" label="Thêm">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <circle cx="12" cy="5" r="1.8" />
+        <circle cx="12" cy="12" r="1.8" />
+        <circle cx="12" cy="19" r="1.8" />
+      </svg>
+    </DropdownMenu>
+  );
+}
+
 export function ReaderToolbar({
   fileName,
-  verify,
+  sidebar,
   viewer,
   download,
+  print,
   menu,
   onSign,
   signing,
 }: {
   fileName: string | null;
-  /** Chỉ có khi PDF có chữ ký số. */
-  verify: { count: number; tone: VerifyTone; open: boolean; onToggle: () => void } | null;
+  /** Nút ☰: menu chọn bảng bên (Thu nhỏ / Xác minh chữ ký / Preview). `count` > 0 khi PDF có chữ ký. */
+  sidebar: { items: MenuItem[]; open: boolean; count: number; tone: VerifyTone } | null;
   viewer: {
     page: number;
     numPages: number;
     onJump: (page: number) => void;
     scale: number | null;
     onZoom: (factor: number) => void;
-    onFit: () => void;
+    onSetScale: (scale: number) => void;
+    fitMode: FitMode;
+    onToggleFit: () => void;
+    onRotate: (delta: number) => void;
   } | null;
-  download: { url: string; name: string } | null;
+  download: { bytes: Uint8Array; name: string } | null;
+  /** Nút In; `busy` khi đang chuẩn bị các trang để in. */
+  print: { onPrint: () => void; busy: boolean } | null;
   menu: MenuItem[];
   onSign: (() => void) | null;
   /** Bảng ký đang mở. */
@@ -122,13 +189,12 @@ export function ReaderToolbar({
   return (
     <header className="rt">
       <div className="rt-left">
-        {verify && (
-          <button
-            type="button"
-            className={`rt-btn rt-verify ${verify.open ? 'on' : ''}`}
-            onClick={verify.onToggle}
-            aria-expanded={verify.open}
-            title={verify.open ? 'Ẩn bảng xác minh chữ ký' : 'Xem xác minh chữ ký'}
+        {sidebar && (
+          <DropdownMenu
+            items={sidebar.items}
+            align="left"
+            label="Bảng bên"
+            className={`rt-verify ${sidebar.open ? 'on' : ''}`}
           >
             <svg
               width="18"
@@ -142,8 +208,10 @@ export function ReaderToolbar({
             >
               <path d="M4 6h16M4 12h16M4 18h16" />
             </svg>
-            <span className={`rt-count ${verify.tone}`}>{verify.count}</span>
-          </button>
+            {sidebar.count > 0 && (
+              <span className={`rt-count ${sidebar.tone}`}>{sidebar.count}</span>
+            )}
+          </DropdownMenu>
         )}
         <span className="rt-title" title={fileName ?? undefined}>
           {fileName ?? 'KysoQR'}
@@ -173,7 +241,7 @@ export function ReaderToolbar({
               <path d="M5 12h14" />
             </svg>
           </button>
-          <span className="rt-zoom">{viewer.scale ? Math.round(viewer.scale * 100) : 100}%</span>
+          <ZoomInput scale={viewer.scale} onSetScale={viewer.onSetScale} />
           <button
             type="button"
             className="rt-btn"
@@ -194,12 +262,13 @@ export function ReaderToolbar({
             </svg>
           </button>
           <span className="rt-sep" />
+          {/* Như Chrome: nút cho biết chế độ sẽ chuyển sang khi bấm. */}
           <button
             type="button"
             className="rt-btn"
-            onClick={viewer.onFit}
-            aria-label="Vừa khít chiều ngang"
-            title="Vừa khít chiều ngang (Ctrl 0)"
+            onClick={viewer.onToggleFit}
+            aria-label={viewer.fitMode === 'width' ? 'Vừa trang' : 'Vừa chiều ngang'}
+            title={`${viewer.fitMode === 'width' ? 'Vừa trang' : 'Vừa chiều ngang'} (Ctrl \)`}
           >
             <svg
               width="18"
@@ -212,8 +281,22 @@ export function ReaderToolbar({
               strokeLinejoin="round"
               aria-hidden="true"
             >
-              <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              {viewer.fitMode === 'width' ? (
+                <path d="M12 7v10m-3-7 3-3 3 3m-6 4 3 3 3-3" />
+              ) : (
+                <path d="M7 12h10m-7-3-3 3 3 3m4-6 3 3-3 3" />
+              )}
             </svg>
+          </button>
+          <button
+            type="button"
+            className="rt-btn"
+            onClick={() => viewer.onRotate(-90)}
+            aria-label="Xoay ngược chiều kim đồng hồ"
+            title="Xoay ngược chiều kim đồng hồ (Ctrl [)"
+          >
+            <Icon name="rotateLeft" size={18} />
           </button>
         </div>
       )}
@@ -222,13 +305,29 @@ export function ReaderToolbar({
         {download && (
           <a
             className="rt-btn"
-            href={download.url}
-            download={download.name}
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              saveFile(download.bytes, download.name);
+            }}
             aria-label="Tải xuống"
             title="Tải xuống"
           >
             <Icon name="download" size={18} />
           </a>
+        )}
+        {print && (
+          <button
+            type="button"
+            className="rt-btn"
+            onClick={print.onPrint}
+            disabled={print.busy}
+            aria-busy={print.busy}
+            aria-label="In"
+            title={print.busy ? 'Đang chuẩn bị bản in…' : 'In (Ctrl P)'}
+          >
+            {print.busy ? <span className="rt-spinner" /> : <Icon name="printer" size={18} />}
+          </button>
         )}
         <OverflowMenu items={menu} />
         {onSign && (
@@ -239,4 +338,14 @@ export function ReaderToolbar({
       </div>
     </header>
   );
+}
+
+/** Chỉ tạo bản sao file (Blob) khi người dùng bấm tải, không giữ sẵn cho mọi tài liệu. */
+function saveFile(bytes: Uint8Array, name: string) {
+  const url = URL.createObjectURL(new Blob([bytes.slice()], { type: 'application/pdf' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

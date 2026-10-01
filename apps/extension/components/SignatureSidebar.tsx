@@ -1,12 +1,14 @@
-import type { ChainCertificate, RevocationResult } from '@kysoqr/shared';
+import type { ChainCertInfo, RevocationCheckResult, VerificationStatus } from '@kysoqr/shared';
 import {
+  commonName,
   verdict,
   type SignatureCheck,
   type SignaturesState,
   type Verdict,
 } from '../lib/useSignatures';
-import { certInfoFromDer, type CertInfo, type Integrity } from '../lib/verify';
+import type { PDFDocumentProxy } from '../lib/pdf';
 import { Icon, type IconName } from './Icon';
+import { PageThumbnails } from './PageThumbnails';
 
 const fmt = (d: Date | string | null | undefined) =>
   d ? new Date(d).toLocaleString('vi-VN') : '—';
@@ -20,83 +22,57 @@ export const VERDICTS: Record<Verdict, { label: string; icon: IconName; tone: st
   invalid: { label: 'Không hợp lệ', icon: 'triangle', tone: 'bad' },
 };
 
-const INTEGRITY: Record<Integrity, string> = {
-  intact: 'Nội dung PDF khớp với bản đã ký',
-  'later-revision': 'Khớp với bản đã ký; sau đó tài liệu được ký hoặc bổ sung thêm',
-  modified: 'Tài liệu có nội dung được thêm hoặc sửa sau khi ký',
+/** Giải thích từng kết quả xác minh của máy chủ (Xsign/kysoqr trả về tiếng Anh). */
+const STATUS_TEXT: Record<VerificationStatus, string> = {
+  SIGNED_VALID: 'Chữ ký, nội dung và chuỗi chứng thư đều hợp lệ',
+  CONTENT_DIGEST_MISMATCH: 'Tài liệu có nội dung được thêm hoặc sửa sau khi ký',
+  CHAIN_VALIDATION_FAILED: 'Chuỗi chứng thư số không hợp lệ',
+  ROOT_NOT_TRUSTED: 'Chứng thư gốc không nằm trong danh sách Root CA tin cậy',
+  SIGNATURE_INVALID: 'Chữ ký không khớp với nội dung tài liệu',
+  TRUST_STORE_NOT_CONFIGURED: 'Máy chủ chưa có danh sách Root CA tin cậy',
+  UNSUPPORTED_SUBFILTER: 'Chưa hỗ trợ kiểm tra loại chữ ký này',
+  UNSUPPORTED_ALGORITHM: 'Chưa hỗ trợ thuật toán của chữ ký này',
 };
 
-const REVOCATION: Record<RevocationResult['status'], string> = {
-  good: 'Chứng thư số chưa bị thu hồi',
+const REVOCATION: Record<RevocationCheckResult['status'], string> = {
+  not_revoked: 'Chứng thư số chưa bị thu hồi',
   revoked: 'Chứng thư số ĐÃ BỊ THU HỒI',
-  unknown: 'Máy chủ không nhận ra chứng thư này',
-  error: 'Không kiểm tra được',
-  unsupported: 'Chưa hỗ trợ kiểm tra',
-  none: 'Không khai báo (thường gặp ở chứng thư gốc)',
+  unavailable: 'Không kiểm tra được',
 };
 
-function Revocation({
-  label,
-  result,
-  fallbackUrl,
-  failed,
-}: {
-  label: string;
-  result?: RevocationResult;
-  fallbackUrl: string | null;
-  failed?: boolean;
-}) {
-  const url = result?.url ?? fallbackUrl;
-  const text = result ? REVOCATION[result.status] : failed ? REVOCATION.error : 'Đang kiểm tra…';
+function Revocation({ label, result }: { label: string; result: RevocationCheckResult | null }) {
+  const text = result
+    ? result.url || result.status !== 'unavailable'
+      ? REVOCATION[result.status]
+      : 'Không khai báo'
+    : 'Không áp dụng (chứng thư gốc)';
   const tone =
-    result?.status === 'good' ? 'ok-text' : result?.status === 'revoked' ? 'error-text' : '';
+    result?.status === 'not_revoked'
+      ? 'ok-text'
+      : result?.status === 'revoked'
+        ? 'error-text'
+        : '';
   return (
     <div>
       <span className="k">{label}: </span>
-      <span className={tone}>
-        {text}
-        {result?.revokedAt && ` lúc ${fmt(result.revokedAt)}`}
-      </span>
-      {result?.detail && result.status !== 'good' && (
-        <span className="muted"> ({result.detail})</span>
-      )}
-      {result?.detail && result.status === 'good' && (
-        <span className="muted"> · {result.detail}</span>
-      )}
-      {url && <div className="url">[{url}]</div>}
+      <span className={tone}>{text}</span>
+      {result?.url && <div className="url">[{result.url}]</div>}
     </div>
   );
 }
 
-function certTitle(cert: CertInfo, index: number, isRoot: boolean) {
+function certTitle(index: number, isRoot: boolean) {
   if (index === 0) return 'Chứng thư số người ký';
   if (isRoot) return 'Chứng thư gốc (Root CA)';
   return 'Tổ chức phát hành (CA)';
 }
 
-const SOURCE_NOTE: Record<ChainCertificate['source'], string | null> = {
-  document: null,
-  'trust-store': 'Lấy từ danh sách chứng thư gốc tin cậy',
-  aia: 'Tải từ địa chỉ của tổ chức phát hành',
-};
-
-function CertCard({
-  cert,
-  index,
-  checked,
-  failed,
-}: {
-  cert: CertInfo;
-  index: number;
-  checked?: ChainCertificate;
-  failed?: boolean;
-}) {
-  const isRoot = cert.subject === cert.issuer && cert.isCa;
+function CertCard({ cert, isRoot }: { cert: ChainCertInfo; isRoot: boolean }) {
   return (
     <div className="cert-card">
       <div className="cert-head">
-        <span>{certTitle(cert, index, isRoot)}</span>
-        <span className="chip">#{index}</span>
+        <span>{certTitle(cert.index, isRoot)}</span>
+        <span className="chip">#{cert.index}</span>
       </div>
       <div className="kv">
         <div>
@@ -115,66 +91,21 @@ function CertCard({
           <span className="k">Hiệu lực: </span>
           {fmt(cert.validFrom)} – {fmt(cert.validTo)}
         </div>
-        {checked?.signatureValid === false && (
-          <div className="error-text">Chữ ký của chứng thư này không hợp lệ</div>
-        )}
-        {checked && SOURCE_NOTE[checked.source] && (
-          <div className="muted">{SOURCE_NOTE[checked.source]}</div>
-        )}
-        <Revocation
-          label="OCSP"
-          result={checked?.ocsp}
-          fallbackUrl={cert.ocspUrl}
-          failed={failed}
-        />
-        <Revocation label="CRL" result={checked?.crl} fallbackUrl={cert.crlUrl} failed={failed} />
+        <Revocation label="OCSP" result={cert.ocsp} />
+        <Revocation label="CRL" result={cert.crl} />
       </div>
     </div>
   );
 }
 
-function ChainDetail({ item }: { item: SignatureCheck }) {
-  const { chain, signature } = item;
-  if (chain.kind !== 'done') {
-    return (
-      <>
-        {signature.certificates.map((c, i) => (
-          <CertCard key={c.serialNumber + i} cert={c} index={i} failed={chain.kind === 'error'} />
-        ))}
-        {chain.kind === 'error' && (
-          <div className="note warn">Không kiểm tra được chuỗi chứng thư: {chain.message}</div>
-        )}
-      </>
-    );
-  }
-  const r = chain.result;
-  return (
-    <>
-      {r.chain.map((c, i) => (
-        <CertCard key={c.der.slice(-24) + i} cert={certInfoFromDer(c.der)} index={i} checked={c} />
-      ))}
-      {!r.trusted && (
-        <div className="note warn">
-          {r.trustStoreConfigured
-            ? 'Chứng thư gốc không nằm trong danh sách tin cậy.'
-            : 'Máy chủ KysoQR chưa cấu hình danh sách chứng thư gốc tin cậy, nên chưa xác minh được tới gốc.'}
-        </div>
-      )}
-      {r.chainError && <div className="note warn">{r.chainError}</div>}
-    </>
-  );
-}
-
 function SignatureCard({ item }: { item: SignatureCheck }) {
-  const s = item.signature;
+  const r = item.result;
   const v = VERDICTS[verdict(item)];
-  const hasDetails = s.certificates.length > 0 || s.reason || s.location || s.hasTimestamp;
+  const chain = r?.certificateChain ?? [];
   return (
     <article className="sig-card">
       <header className="sig-head">
-        <span className="sig-title">
-          {s.kind === 'document-timestamp' ? 'Dấu thời gian' : 'Chữ ký số'} #{s.index}
-        </span>
+        <span className="sig-title">Chữ ký số #{item.index}</span>
         <span className={`badge ${v.tone}`}>
           <Icon name={v.icon} size={12} /> {v.label}
         </span>
@@ -182,53 +113,42 @@ function SignatureCard({ item }: { item: SignatureCheck }) {
       <div className="kv">
         <div>
           <span className="k">Người ký: </span>
-          {s.signerName ?? '—'}
+          {commonName(r?.certificate?.subject) ?? '—'}
         </div>
         <div>
           <span className="k">Thời điểm ký: </span>
-          {fmt(s.signedAt)}
+          {fmt(r?.signedAt)}
         </div>
         <div>
-          <span className="k">Tài liệu đã ký: </span>
-          {s.signatureValid ? (
-            INTEGRITY[s.integrity]
+          <span className="k">Kết quả: </span>
+          {r ? (
+            <span className={r.status === 'SIGNED_VALID' ? '' : 'error-text'}>
+              {STATUS_TEXT[r.status]}
+            </span>
+          ) : item.error ? (
+            <span className="error-text">{item.error}</span>
           ) : (
-            <span className="error-text">{s.error}</span>
+            'Đang kiểm tra…'
           )}
         </div>
+        {r?.certificateExpiredNow && (
+          <div className="muted">
+            Chứng thư số đã hết hạn tính tới hôm nay, nhưng còn hiệu lực lúc ký nên chữ ký vẫn có
+            giá trị.
+          </div>
+        )}
       </div>
-      {hasDetails && (
+      {chain.length > 0 && (
         <details className="chain">
           <summary>
             Xem chi tiết <Icon name="chevronDown" size={12} />
           </summary>
-          {(s.reason || s.location || s.hasTimestamp) && (
-            <div className="kv">
-              {s.reason && (
-                <div>
-                  <span className="k">Lý do: </span>
-                  {s.reason}
-                </div>
-              )}
-              {s.location && (
-                <div>
-                  <span className="k">Nơi ký: </span>
-                  {s.location}
-                </div>
-              )}
-              {s.hasTimestamp && (
-                <div>
-                  <span className="k">Dấu thời gian: </span>
-                  Có (thời điểm ký do máy chủ dấu thời gian xác nhận)
-                </div>
-              )}
-            </div>
-          )}
-          {s.certificates.length > 0 && (
-            <>
-              <div className="chain-title">Chuỗi chứng thư số</div>
-              <ChainDetail item={item} />
-            </>
+          <div className="chain-title">Chuỗi chứng thư số</div>
+          {chain.map((c, i) => (
+            <CertCard key={c.serialNumber + i} cert={c} isRoot={i === chain.length - 1 && c.isCa} />
+          ))}
+          {r?.certificateChainRootNotInTrustStore && (
+            <div className="note warn">Chứng thư gốc không nằm trong danh sách tin cậy.</div>
           )}
         </details>
       )}
@@ -236,31 +156,58 @@ function SignatureCard({ item }: { item: SignatureCheck }) {
   );
 }
 
-/** Bảng xác minh bên trái — chỉ hiện khi PDF có chữ ký số. */
+export type SidebarPanel = 'verify' | 'pages';
+
+/** Bảng bên trái: xác minh chữ ký (mặc định khi PDF có chữ ký) hoặc Preview ảnh thu nhỏ các trang. */
 export function SignatureSidebar({
+  panel,
   signatures,
+  doc,
+  page,
+  onJump,
+  rotation,
+  annotations,
   onClose,
 }: {
+  panel: SidebarPanel;
   signatures: SignaturesState;
+  doc: PDFDocumentProxy;
+  page: number;
+  onJump: (page: number) => void;
+  rotation?: number;
+  annotations?: boolean;
   onClose: () => void;
 }) {
   const count = signatures.items.length;
+  const verify = panel === 'verify';
   return (
-    <aside className="sidebar" aria-label="Xác minh chữ ký">
+    <aside className="sidebar" aria-label={verify ? 'Xác minh chữ ký' : 'Preview các trang'}>
       <div className="sidebar-head">
         <div>
-          <h2>Xác minh chữ ký</h2>
-          <p className="muted small">Tài liệu này có {count} chữ ký số.</p>
+          <h2>{verify ? 'Xác minh chữ ký' : 'Preview'}</h2>
+          <p className="muted small">
+            {verify ? `Tài liệu này có ${count} chữ ký số.` : `${doc.numPages} trang`}
+          </p>
         </div>
-        <button type="button" className="icon-btn" onClick={onClose} aria-label="Ẩn bảng xác minh">
+        <button type="button" className="icon-btn" onClick={onClose} aria-label="Thu nhỏ bảng bên">
           <Icon name="x" size={16} />
         </button>
       </div>
-      <div className="sidebar-body">
-        {signatures.items.map((item) => (
-          <SignatureCard key={item.signature.index} item={item} />
-        ))}
-      </div>
+      {verify ? (
+        <div className="sidebar-body">
+          {signatures.items.map((item) => (
+            <SignatureCard key={item.index} item={item} />
+          ))}
+        </div>
+      ) : (
+        <PageThumbnails
+          doc={doc}
+          page={page}
+          onJump={onJump}
+          rotation={rotation}
+          annotations={annotations}
+        />
+      )}
     </aside>
   );
 }

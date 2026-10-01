@@ -1,9 +1,9 @@
 import type {
-  CertificateCheckRequest,
-  CertificateCheckResponse,
   CreateSignRequestMeta,
   CreateSignRequestResponse,
   SignRequestStatusResponse,
+  VerificationResult,
+  VerifyResponse,
 } from '@kysoqr/shared';
 
 export const BACKEND_URL = (
@@ -25,8 +25,8 @@ const MESSAGES: Record<string, string> = {
   FILE_TOO_LARGE: 'File vượt quá 10MB.',
   MISSING_FILE_OR_META: 'Thiếu file hoặc thông tin ký.',
   NOT_FOUND: 'Không tìm thấy yêu cầu ký (có thể đã bị xoá).',
-  FILE_NOT_READY: 'File đã ký chưa sẵn sàng.',
-  SIGNING_ROUND_NOT_READY: 'Chưa có thông tin phiên ký.',
+  CAS_NOT_PDF: 'Cas ID không trả về file PDF đã ký.',
+  VERIFICATION_FAILED: 'Không xác minh được chữ ký trong file này.',
   CAS_NO_QR: 'Cas ID không trả về mã QR. Hãy nhập số CCCD để nhận thông báo ký trên app Cas ID.',
 };
 
@@ -73,8 +73,6 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
-const auth = (accessToken: string) => ({ headers: { 'x-access-token': accessToken } });
-
 export async function createSignRequest(
   pdf: Uint8Array,
   fileName: string,
@@ -87,16 +85,18 @@ export async function createSignRequest(
   return res.json();
 }
 
-export async function getStatus(
-  id: string,
-  accessToken: string,
-): Promise<SignRequestStatusResponse> {
-  const res = await request(`/api/sign-requests/${id}`, auth(accessToken));
+export async function getStatus(id: string): Promise<SignRequestStatusResponse> {
+  const res = await request(`/api/sign-requests/${id}`);
   return res.json();
 }
 
-export async function getSignedFile(id: string, accessToken: string): Promise<Uint8Array> {
-  const res = await request(`/api/sign-requests/${id}/file`, auth(accessToken));
+/** Tải file đã ký thẳng từ CAS (qua backend, không lưu lại). Mỗi identityKey dùng được tối đa 5 lần. */
+export async function getSignedFile(identityKey: string): Promise<Uint8Array> {
+  const res = await request('/api/signed-file', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identityKey }),
+  });
   return new Uint8Array(await res.arrayBuffer());
 }
 
@@ -115,23 +115,16 @@ export interface SigningRound {
   };
 }
 
-export async function getSigningRound(
-  id: string,
-  accessToken: string,
-): Promise<SigningRound | null> {
-  const res = await request(`/api/sign-requests/${id}/signing-round`, auth(accessToken));
+export async function getSigningRound(orgIdSigned: string): Promise<SigningRound | null> {
+  const res = await request(`/api/signing-round/${encodeURIComponent(orgIdSigned)}`);
   const data = (await res.json()) as { signingRound?: SigningRound };
   return data.signingRound ?? null;
 }
 
-/** Kiểm tra chuỗi chứng thư (tới gốc tin cậy, OCSP, CRL). Chỉ gửi chứng thư, không gửi nội dung file. */
-export async function checkCertificates(
-  body: CertificateCheckRequest,
-): Promise<CertificateCheckResponse> {
-  const res = await request('/api/certificates/check', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return res.json();
+/** Xác minh mọi chữ ký trong PDF ở backend (chuỗi chứng thư tới Root CA, thu hồi). Backend không lưu file. */
+export async function verifyPdf(pdf: Uint8Array): Promise<VerificationResult[]> {
+  const form = new FormData();
+  form.set('file', new Blob([pdf.slice()], { type: 'application/pdf' }), 'document.pdf');
+  const res = await request('/api/verify', { method: 'POST', body: form });
+  return ((await res.json()) as VerifyResponse).signatures;
 }

@@ -1,8 +1,8 @@
-/** Dữ liệu lưu trên máy người dùng (chrome.storage.local). */
+/** Dữ liệu lưu trên máy người dùng (chrome.storage.local). Không lưu yêu cầu ký nào. */
 
-export interface HistoryItem {
+/** Yêu cầu ký đang xử lý, chỉ nằm trong bộ nhớ của tab (không lưu lại). */
+export interface SignRequestItem {
   signRequestId: string;
-  accessToken: string;
   documentName: string;
   fileName: string;
   qrContent: string;
@@ -12,27 +12,7 @@ export interface HistoryItem {
   state?: string;
 }
 
-const HISTORY_KEY = 'history';
 const CCCD_KEY = 'identificationNumber';
-const MAX_HISTORY = 20;
-
-export async function getHistory(): Promise<HistoryItem[]> {
-  const data = await browser.storage.local.get(HISTORY_KEY);
-  return (data[HISTORY_KEY] as HistoryItem[] | undefined) ?? [];
-}
-
-export async function upsertHistory(item: HistoryItem) {
-  const list = (await getHistory()).filter((h) => h.signRequestId !== item.signRequestId);
-  await browser.storage.local.set({ [HISTORY_KEY]: [item, ...list].slice(0, MAX_HISTORY) });
-}
-
-export async function updateHistoryState(signRequestId: string, state: string) {
-  const list = await getHistory();
-  const item = list.find((h) => h.signRequestId === signRequestId);
-  if (!item || item.state === state) return;
-  item.state = state;
-  await browser.storage.local.set({ [HISTORY_KEY]: list });
-}
 
 export async function getSavedCccd(): Promise<string> {
   const data = await browser.storage.local.get(CCCD_KEY);
